@@ -1,79 +1,75 @@
 # Prompt Workbench
 
-A [Streamlit](https://streamlit.io/) workspace for engineering system prompts
-for any use case. Describe what you need a prompt to do, answer a few
-clarifying questions, and the workbench turns that brief into artifacts you can
-actually test: candidate system prompts written with different prompt
-techniques, a hybrid ground-truth dataset, manual model runs, and an evaluation
-you start yourself.
+A [Streamlit](https://streamlit.io/) workspace for finding the prompt that makes
+a job come out right. Pick one of ten real prompt-engineering situations — its
+knowledge base, candidate lists and tool schemas already mocked — then work on
+the prompt with an engineer, run it as the end user, and examine what comes
+back.
 
 Built by [Moha Kashani](mailto:s.moha.m.kashani@gmail.com) as a demonstration of
 production-minded LLM application engineering.
 
-> **Status:** the five workspace areas below are implemented and covered by an
-> offline test suite. Workspace artifacts live in the browser session; durable
-> save/load is deliberately out of scope for this release.
+> **Status:** early. The ten use cases, both chat modes, and evaluation work
+> and are covered by an offline test suite. Nothing persists beyond the browser
+> session.
+
+## The idea
+
+A prompt is only judgeable inside a situation. "What should this classifier's
+prompt say?" has no answer until you know what the candidate list looks like,
+how near the distractors are, and what happens when the list comes back empty.
+Those surroundings normally come from a whole application, which is why prompts
+usually get written blind.
+
+So each use case here brings its own world, already mocked — a knowledge base, a
+candidate list, tool schemas, prior state — and states the failure it is known
+to produce. Then you can run the prompt and read what comes back.
 
 ## The workflow
 
-1. **Define** — write a free-text use-case brief. A clarification chat asks
-   about purpose, audience, inputs, desired behaviour, constraints, output
-   format, examples, and failure cases, then you edit and confirm a structured
-   brief. Confirming records an immutable snapshot.
-2. **Ground Truth** — generate a hybrid dataset of test cases from the
-   confirmed brief. Each case carries a test message, required criteria,
-   forbidden behaviours, and tags, plus an optional reference answer for tasks
-   that have one right shape. Every case is editable.
-3. **Candidates** — generate one complete candidate system prompt per prompt
-   technique (direct/zero-shot, role-based, few-shot, structured-output,
-   reasoning-guided). Each candidate is labelled with its technique and its
-   provenance, and stays editable.
-4. **Test** — pick a candidate, a model, and sampling settings, then run a test
-   message yourself in an isolated chat thread that keeps its full short-term
-   history. Every response records the candidate, model, settings, brief, test
-   case, and thread it came from.
-5. **Evaluate** — choose built-in or custom weighted metrics and press
-   Evaluate. Nothing is scored until you do. Results show per-metric evidence,
-   reasons, failures, and a grade you can reproduce by hand from the displayed
-   scores and weights.
+1. **Pick a use case.** The dropdown holds ten real situations. Picking one
+   writes an explanation into the chat: what the job is, what usually goes
+   wrong, what has been mocked for you, and what a good response must do.
+2. **Read the prompt it starts from.** One collapsed panel above the chat. Every
+   use case starts from a prompt that is plausible and imperfect — usually the
+   one with the failure still in it.
+3. **Work on it in the chat**, in either of two modes:
+   - **Prompt engineer** — discusses the problem across turns and hands back a
+     *complete* replacement prompt you apply in one click. Never a diff:
+     reassembling a prompt by hand is how a placeholder goes missing.
+   - **End user (one-shot)** — one message in, one response out, no history. The
+     response reflects the prompt and the mocks and nothing else, so sending the
+     same message twice tells you what your edit actually changed.
+4. **Evaluate, when you ask.** The use case's own criteria are the ground truth,
+   so there is no dataset to write. Nothing is scored until you press the button.
 
-## Metrics and judges
+## The ten use cases
 
-Four metrics ship enabled, each answering something the others cannot:
-
-| Metric | Scored by | What it asks |
+| Situation | What is mocked | The failure being hunted |
 | --- | --- | --- |
-| Criteria coverage | Judge | Did the reply do what this case requires? |
-| Forbidden behaviour | Judge | Did it avoid what this case rules out? |
-| Format compliance | Code | Is it the right shape — valid JSON, within a stated limit? |
-| Reference similarity | Judge | Where an ideal answer exists, how close is this? |
+| Judging retrieved chunks | a result set with near-miss distractors | waves everything through; drops an id |
+| Grounded briefing | a history block that is **empty** | invents a history that was never there |
+| Answering from several contexts | four blocks, one stale and contradicting | states the stale claim as current |
+| Classify against a closed set | candidate ids incl. a cluster head | invents ids; over-tags |
+| Gatekeeping a near-duplicate | a catalogue already holding it | accepts, and the catalogue proliferates |
+| Routing to one bucket | buckets, one fitting but worded differently | creates new instead of reusing |
+| Rewriting a running summary | a prior summary holding a detail | logs events; drops the earlier detail |
+| One step of a tool-calling agent | tool schemas + a scratchpad of dead ends | repeats the call that just failed |
+| Holding a scope guardrail | a message inviting clinical advice | helps anyway, because refusing feels unkind |
+| Prompt injection in user data | a store containing the injection | obeys the injected instruction |
 
-Add your own with a name, a rubric, and a weight; custom metrics score through
-exactly the same path as the built-ins.
-
-Judging runs on one of two backends:
-
-- **Codex CLI (default)** — runs the local `codex` binary as a subprocess,
-  reaching a strong model through this machine's own login. It needs no
-  workspace API key, and it never receives one: the child process gets a strict
-  environment allowlist, a read-only sandbox, and an empty working directory.
-- **Provider model** — uses your API key, for machines without the CLI.
-
-Judging with a different model from the one under test is the point of the
-separate selector: a model grading its own output grades its own habits as
-correct.
-
-**Read [`docs/LIMITATIONS.md`](docs/LIMITATIONS.md) before trusting a grade.**
-Judge noise, generated ground truth, and what a failed metric does to the
-arithmetic are all covered there.
+Use cases are YAML files in `src/prompt_workbench/use_cases/`. Adding one needs
+no code change.
 
 ## Design principles
 
-- **Only chat is stateful.** Conversations keep thread-scoped history;
-  generation and evaluation take explicit input snapshots, so their results are
-  reproducible and testable.
-- **Nothing hidden.** Prompts, datasets, metrics, rubrics, and grades are
-  visible and editable rather than buried in code.
+- **One-shot means one-shot.** The end-user mode keeps no history at all, which
+  is what makes a response evidence about the prompt rather than about the
+  conversation that preceded it.
+- **Complete prompts, never diffs.** The engineer returns the whole prompt, so
+  applying its advice cannot silently drop a placeholder.
+- **Nothing hidden.** Prompts, mocks, criteria, rubrics, and grades are visible
+  and editable rather than buried in code.
 - **Evaluation is a decision, not a side effect.** No edit, generation, or
   manual run triggers a judge call.
 - **Layered architecture.** A thin Streamlit UI over `core/` (orchestration),

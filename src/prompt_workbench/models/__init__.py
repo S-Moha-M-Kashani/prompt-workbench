@@ -19,6 +19,7 @@ from prompt_workbench.models.metrics import MetricDefinition, MetricKind
 from prompt_workbench.models.model_info import ModelInfo
 from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.runs import PromptRun
+from prompt_workbench.models.usage import TokenUsage
 from prompt_workbench.models.use_case import MockBlock, UseCase
 
 __all__ = [
@@ -38,6 +39,7 @@ __all__ = [
     "ModelInfo",
     "ModelSettings",
     "PromptRun",
+    "TokenUsage",
     "UseCase",
     "random_id",
     "sequential_ids",

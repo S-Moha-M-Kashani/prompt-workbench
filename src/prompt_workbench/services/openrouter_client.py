@@ -23,6 +23,7 @@ from openai import OpenAI
 
 from prompt_workbench.models import ModelSettings
 from prompt_workbench.models.protocols import Message
+from prompt_workbench.models.usage import TokenUsage
 from prompt_workbench.services import model_catalog
 
 API_KEY_ENV = "PROVIDER_API_KEY"
@@ -159,14 +160,17 @@ def chat_completion_with_usage(
     client: OpenAI,
     model: str | None = None,
     settings: ModelSettings | None = None,
-) -> tuple[str, int]:
-    """Like ``chat_completion`` but also return the total token count.
+) -> tuple[str, TokenUsage]:
+    """Like ``chat_completion``, and also what the call cost.
 
-    Returns ``(text, total_tokens)``; ``total_tokens`` is 0 when the provider
-    does not report usage.
+    Returns ``(text, usage)``. A provider that reports no usage yields zeros
+    rather than raising: the response is still the thing being examined, and
+    losing it over a missing counter would be the wrong trade.
     """
     response = client.chat.completions.create(**_create_params(model, messages, settings))
     text = response.choices[0].message.content or ""
-    usage = getattr(response, "usage", None)
-    total_tokens = getattr(usage, "total_tokens", 0) or 0
-    return text, total_tokens
+    reported = getattr(response, "usage", None)
+    return text, TokenUsage(
+        tokens_in=int(getattr(reported, "prompt_tokens", 0) or 0),
+        tokens_out=int(getattr(reported, "completion_tokens", 0) or 0),
+    )

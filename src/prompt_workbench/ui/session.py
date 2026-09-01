@@ -19,8 +19,9 @@ import streamlit as st
 from prompt_workbench.core.chat_memory import ThreadStore
 from prompt_workbench.core.session import Session
 from prompt_workbench.models.model_settings import ModelSettings
-from prompt_workbench.models.protocols import CompletionFn, Message
+from prompt_workbench.models.protocols import CompletionFn, CompletionWithUsageFn, Message
 from prompt_workbench.services import judges, model_catalog, openrouter_client
+from prompt_workbench.models.usage import TokenUsage
 from prompt_workbench.services.metric_adapters import JudgeFn
 from prompt_workbench.services.openrouter_client import ProviderConfig
 
@@ -59,6 +60,16 @@ def has_credentials() -> bool:
     return provider_config().has_api_key
 
 
+def model_settings() -> ModelSettings:
+    if "model_settings" not in _state():
+        _state().model_settings = ModelSettings()
+    return _state().model_settings
+
+
+def set_model_settings(settings: ModelSettings) -> None:
+    _state().model_settings = settings
+
+
 def completion() -> CompletionFn:
     """A provider call bound to this session's credentials.
 
@@ -80,6 +91,27 @@ def completion() -> CompletionFn:
             model=model or selected_model(),
             settings=settings,
             response_format=response_format,
+        )
+
+    return complete
+
+
+def completion_with_usage() -> CompletionWithUsageFn:
+    """A provider call that also reports what it cost.
+
+    Used by the one-shot runner, which is the mode whose cost is worth showing:
+    it is the one that sends the prompt under test.
+    """
+    client = openrouter_client.build_client(provider_config())
+
+    def complete(
+        messages: list[Message],
+        *,
+        model: str | None = None,
+        settings: ModelSettings | None = None,
+    ) -> tuple[str, TokenUsage]:
+        return openrouter_client.chat_completion_with_usage(
+            messages, client=client, model=model or selected_model(), settings=settings
         )
 
     return complete

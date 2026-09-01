@@ -15,7 +15,7 @@ from datetime import datetime
 
 from prompt_workbench.models.identifiers import IdFactory
 from prompt_workbench.models.model_settings import ModelSettings
-from prompt_workbench.models.protocols import CompletionFn
+from prompt_workbench.models.protocols import CompletionWithUsageFn
 from prompt_workbench.models.runs import PromptRun
 from prompt_workbench.models.use_case import UseCase
 
@@ -32,7 +32,7 @@ def run_once(
     user_message: str,
     model: str,
     settings: ModelSettings | None = None,
-    complete: CompletionFn,
+    complete: CompletionWithUsageFn,
     new_id: IdFactory,
     clock: Callable[[], datetime],
 ) -> PromptRun:
@@ -55,14 +55,15 @@ def run_once(
         )
 
     system_prompt = use_case.filled_prompt(prompt_under_test)
-    response = complete(
+    raw, usage = complete(
         [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
         ],
         model=model,
         settings=settings,
-    ).strip()
+    )
+    response = raw.strip()
 
     if not response:
         raise RunFailed(
@@ -79,4 +80,5 @@ def run_once(
         user_message=user_message,
         response=response,
         created_at=clock(),
+        usage=usage,
     )

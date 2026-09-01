@@ -9,6 +9,7 @@ a concrete provider SDK.
 from typing import Any, Protocol
 
 from prompt_workbench.models.model_settings import ModelSettings
+from prompt_workbench.models.usage import TokenUsage
 
 Message = dict[str, str]
 
@@ -25,10 +26,17 @@ class CompletionFn(Protocol):
 
 
 class CompletionWithUsageFn(Protocol):
+    """A completion that also reports what it cost.
+
+    Separate from ``CompletionFn`` rather than replacing it: only the one-shot
+    runner needs the numbers, and widening the common protocol would make every
+    fake in the suite return a tuple it does not care about.
+    """
+
     def __call__(
         self,
         messages: list[Message],
         *,
         model: str | None = None,
         settings: ModelSettings | None = None,
-    ) -> tuple[str, int]: ...
+    ) -> tuple[str, TokenUsage]: ...

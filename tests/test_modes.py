@@ -9,7 +9,7 @@ from prompt_workbench.core import engineer, one_shot
 from prompt_workbench.core.chat_memory import ThreadStore
 from prompt_workbench.core.generation import GenerationError
 from prompt_workbench.core.one_shot import RunFailed
-from prompt_workbench.models import ModelSettings, sequential_ids
+from prompt_workbench.models import ModelSettings, TokenUsage, sequential_ids
 from prompt_workbench.services import use_case_catalog
 
 WHEN = datetime(2026, 3, 1, tzinfo=UTC)
@@ -26,6 +26,19 @@ def replying(*replies: str):  # type: ignore[no-untyped-def]
     def complete(messages, *, model=None, settings=None, response_format=None):  # type: ignore[no-untyped-def]
         sent.append(messages)
         return queue.pop(0) if queue else replies[-1]
+
+    return complete, sent
+
+
+def answering(*replies: str):  # type: ignore[no-untyped-def]
+    """A one-shot completion: returns text plus the usage the provider reported."""
+    sent: list[list[dict[str, str]]] = []
+    queue = list(replies)
+
+    def complete(messages, *, model=None, settings=None):  # type: ignore[no-untyped-def]
+        sent.append(messages)
+        text = queue.pop(0) if queue else replies[-1]
+        return text, TokenUsage(tokens_in=len(str(messages)) // 4, tokens_out=len(text) // 4)
 
     return complete, sent
 
@@ -154,14 +167,14 @@ def run_once(complete, **overrides):  # type: ignore[no-untyped-def]
 
 
 def test_a_one_shot_run_sends_exactly_one_system_and_one_user_message() -> None:
-    complete, sent = replying("There is no previous history on this topic.")
+    complete, sent = answering("There is no previous history on this topic.")
     run_once(complete)
     assert len(sent) == 1
     assert [m["role"] for m in sent[0]] == ["system", "user"]
 
 
 def test_the_mocks_are_substituted_before_the_call() -> None:
-    complete, sent = replying("ok")
+    complete, sent = answering("ok")
     run_once(complete)
     system = sent[0][0]["content"]
     assert "(no matching history)" in system
@@ -169,7 +182,7 @@ def test_the_mocks_are_substituted_before_the_call() -> None:
 
 
 def test_the_run_records_the_filled_prompt_that_was_actually_sent() -> None:
-    complete, _ = replying("ok")
+    complete, _ = answering("ok")
     record = run_once(complete)
     assert "{history}" not in record.system_prompt
     assert record.use_case_key == "grounded_briefing"
@@ -179,7 +192,7 @@ def test_the_run_records_the_filled_prompt_that_was_actually_sent() -> None:
 
 def test_two_runs_in_a_row_share_no_history() -> None:
     """The whole point of one-shot: the second call must not see the first."""
-    complete, sent = replying("first answer", "second answer")
+    complete, sent = answering("first answer", "second answer")
     run_once(complete, user_message="one")
     run_once(complete, user_message="two")
     assert len(sent[1]) == 2
@@ -196,7 +209,7 @@ def test_a_prompt_referring_to_a_missing_mock_is_refused_before_the_call() -> No
 
 
 def test_an_empty_response_is_reported_and_records_nothing() -> None:
-    complete, _ = replying("   ")
+    complete, _ = answering("   ")
     with pytest.raises(RunFailed, match="empty response"):
         run_once(complete)
 

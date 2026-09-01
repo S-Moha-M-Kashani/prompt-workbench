@@ -8,8 +8,10 @@ what came back. Storing the prompt *text* rather than a pointer to it means a
 run stays readable after the prompt is edited ten more times.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+
+from prompt_workbench.models.usage import TokenUsage
 
 
 @dataclass(frozen=True)
@@ -24,7 +26,7 @@ class PromptRun:
     user_message: str
     response: str
     created_at: datetime
-    total_tokens: int = 0
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
     @property
     def is_scoreable(self) -> bool:

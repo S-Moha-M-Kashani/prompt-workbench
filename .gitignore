@@ -1,0 +1,35 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.pytest_cache/
+
+# Virtual environments
+.venv
+
+# OS files
+.DS_Store
+
+.env
+
+# Editor — share only the project-wide settings
+.vscode/*
+!.vscode/settings.json
+
+.mypy_cache/
+
+# Local tooling & workflow files (not for a public repo)
+.claude/
+.agents/
+.codex/
+.superpowers/
+
+# Internal docs — everything except README stays local
+docs/
+openspec/
+CLAUDE.md
+AGENTS.md
+PLAN*.md

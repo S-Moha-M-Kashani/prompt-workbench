@@ -257,7 +257,8 @@ def _run_one_shot(
                 prompt_revision=workbench.prompt_revision,
                 user_message=message,
                 model=session.selected_model(),
-                complete=session.completion(),
+                settings=session.model_settings(),
+                complete=session.completion_with_usage(),
                 new_id=workbench.new_id,
                 clock=workbench.clock,
             )
@@ -280,10 +281,13 @@ def _render_evaluation(workbench: Session) -> None:
     if latest is None:
         return
 
+    cost = (
+        f" · {latest.usage}" if latest.usage.is_reported else " · token usage not reported"
+    )
     left, right = st.columns([3, 1])
     left.caption(
-        f"Last response recorded as `{latest.id}` at revision {latest.prompt_revision}. "
-        "Nothing is scored until you ask."
+        f"Last response recorded as `{latest.id}` at revision {latest.prompt_revision}"
+        f"{cost}. Nothing is scored until you ask."
     )
     if right.button("Evaluate", type="primary", use_container_width=True):
         _evaluate(workbench)

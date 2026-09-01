@@ -197,14 +197,64 @@ def test_there_is_exactly_one_chat_input(monkeypatch):
     assert len(at.chat_input) == 1
 
 
-def test_no_sampling_knobs_are_offered(monkeypatch):
-    """The knobs were removed on purpose: they made tuning the activity."""
+def test_the_main_screen_carries_no_knobs(monkeypatch):
+    """Settings belong in the sidebar. The screen itself stays a use case, a
+    prompt and a conversation."""
     _without_credentials(monkeypatch)
 
     at = AppTest.from_file(APP).run()
     picker = next(box for box in at.selectbox if box.label == "Use case")
     at = picker.set_value("grounded_briefing").run()
 
-    assert not at.slider
-    labels = {box.label for box in at.selectbox}
-    assert not {"temperature", "top_p", "max_tokens"} & labels
+    sidebar_sliders = {slider.label for slider in at.sidebar.slider}
+    assert {"temperature", "top_p"} <= sidebar_sliders
+    assert len(at.slider) == len(at.sidebar.slider), "no slider outside the sidebar"
+
+
+def test_model_settings_are_offered_for_a_model_that_honours_them(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
+    at = model_pick.set_value("openai/gpt-4o-mini").run()
+
+    labels = {slider.label for slider in at.sidebar.slider}
+    assert {"temperature", "top_p"} <= labels
+    assert not any(slider.disabled for slider in at.sidebar.slider)
+
+
+def test_model_settings_stay_visible_but_disabled_for_a_reasoning_model(monkeypatch):
+    """They are shown rather than hidden so the reason is legible: this model
+    drops them, it is not that the workbench forgot to offer them."""
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
+    at = model_pick.set_value("openai/gpt-5-mini").run()
+
+    sampling = [s for s in at.sidebar.slider if s.label in {"temperature", "top_p"}]
+    assert sampling, "sampling settings must stay on screen"
+    assert all(s.disabled for s in sampling)
+
+
+def test_the_output_cap_stays_active_for_a_reasoning_model(monkeypatch):
+    """max_tokens is the one knob a reasoning model does honour."""
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
+    at = model_pick.set_value("openai/gpt-5-mini").run()
+
+    cap = next(box for box in at.sidebar.number_input if box.label == "max_tokens")
+    assert not cap.disabled
+
+
+def test_the_sidebar_says_why_settings_are_disabled(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
+    at = model_pick.set_value("openai/gpt-5-mini").run()
+
+    captions = " ".join(caption.value for caption in at.sidebar.caption)
+    assert "ignore" in captions.lower() or "drop" in captions.lower()

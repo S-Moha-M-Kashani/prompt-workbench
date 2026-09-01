@@ -1,0 +1,55 @@
+key: routing_to_one_bucket
+label: Routing an item to exactly one existing bucket
+family: structure
+origin: a tracker that assigns each exchange to one topic, new or existing
+situation: |
+  Every incoming item must be filed under exactly one bucket. Your prompt
+  either reuses an existing bucket or creates a new one, and it should strongly
+  prefer reuse.
+
+  The item in front of you fits an existing bucket, but is worded nothing like
+  it.
+trap: |
+  Creating a new bucket because the wording is new. Do that consistently and
+  the buckets multiply until each holds one item, at which point the grouping
+  has stopped being a grouping. The mirror failure is jamming an item into a
+  bucket that plainly does not fit, just to avoid creating one.
+example_message: |
+  File this exchange.
+criteria:
+  - reuses the existing money-related bucket rather than creating a new one
+  - reports is_new as false
+  - rewrites the bucket summary to reflect the new state
+  - returns valid JSON in the requested shape
+forbidden:
+  - creates a new bucket when an existing one covers the item
+  - files the item under an unrelated existing bucket
+mocks:
+  - name: existing_topics
+    label: Buckets that already exist
+    note: one fits, worded differently
+    content: |
+      - "Talking about money" [unresolved] — They avoid the subject; last
+        attempt ended in an argument about a shared account.
+      - "Weekend plans" [active] — Trying to protect one evening a week.
+      - "In-laws" [resolved] — Boundaries agreed in March.
+  - name: user_text
+    label: The new item
+    content: |
+      We had another blow-up about the joint account yesterday. I brought up
+      the credit card bill and it went badly again.
+system_prompt: |
+  You maintain topic-status summaries. Given the latest item and the list of
+  existing topics, assign the item to ONE topic — reuse an existing topic
+  whenever plausible; create a new one only if nothing fits — and rewrite that
+  topic's summary as its CURRENT STATUS.
+
+  Return ONLY valid JSON:
+  {"topic": "<name>", "is_new": true/false, "status": "active" | "resolved",
+   "summary": "<2-4 sentences>"}
+
+  EXISTING TOPICS:
+  {existing_topics}
+
+  LATEST ITEM:
+  {user_text}

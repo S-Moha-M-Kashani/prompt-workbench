@@ -1,0 +1,52 @@
+key: closed_set_classification
+label: Classify against a closed set of ids
+family: structure
+origin: a tutoring app tagging lesson summaries onto a 1,700-topic graph
+situation: |
+  A piece of text has to be filed against a taxonomy far too large to put in a
+  prompt, so a keyword search has already narrowed it to a handful of
+  candidates. Your prompt picks which of those the text genuinely belongs to,
+  and returns their ids exactly.
+
+  Downstream, anything you return is written to a graph as an edge. An id that
+  does not exist becomes a dangling edge nobody notices.
+trap: |
+  Two failures at once. The model invents a plausible-looking id rather than
+  copying one, and it tags everything that is loosely adjacent — which makes
+  the record noisier rather than richer. Note the cluster head in the
+  candidates: it is a heading, not a topic, and tagging it says nothing useful.
+example_message: |
+  Summary to file:
+  "Practised ordering food in a restaurant. Confused 'I would like' with
+  'I will like' twice. Asked how to ask for the bill politely."
+criteria:
+  - returns only ids copied exactly from the candidate list
+  - selects the candidates the text genuinely covers, not everything adjacent
+  - returns valid JSON in the requested shape
+  - gives a short reason for each selection
+forbidden:
+  - returns an id that does not appear in the candidate list
+  - selects the domain-level cluster head
+  - wraps the JSON in markdown fences
+mocks:
+  - name: candidates
+    label: Candidate topics from keyword search
+    note: includes a cluster head and two near-miss distractors
+    content: |
+      - id=sit.restaurant.order | Ordering a meal [situational] | Asking for dishes, sides and drinks
+      - id=fun.polite.request | Making a polite request [functional] | Softened asks with would/could
+      - id=gram.conditional.would | 'Would' for hypotheticals [grammar] | would + bare infinitive
+      - id=dom.food_and_drink | Food and drink [domain] | Cluster head for eating out
+      - id=sit.hotel.checkin | Checking into a hotel [situational] | Arrival, rooms, keys
+      - id=voc.menu_items | Menu vocabulary [vocabulary] | Dishes, courses, cutlery
+system_prompt: |
+  You attach a summary to the curriculum topics it actually covers, so a later
+  search can find it.
+
+  Pick only the candidates the summary genuinely covers. Two to four is normal.
+
+  Return ONLY valid JSON:
+  {"tags": [{"id": "<copied exactly>", "confidence": <0.0-1.0>, "reason": "<one sentence>"}]}
+
+  CANDIDATE TOPICS:
+  {candidates}

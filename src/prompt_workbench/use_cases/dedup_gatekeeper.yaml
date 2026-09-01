@@ -1,0 +1,54 @@
+key: dedup_gatekeeper
+label: Gatekeeping a near-duplicate proposal
+family: structure
+origin: a curriculum graph where topic proliferation quietly ruins retrieval
+situation: |
+  An automated agent keeps proposing new entries for a catalogue that already
+  holds hundreds. Your prompt is the gate: accept the proposal, merge it into
+  something that already exists, or reject it.
+
+  The proposal in front of you is a rewording of an entry that is already
+  there.
+trap: |
+  Accepting it. A near-duplicate looks new because its wording is new, and
+  accepting is the agreeable answer. But two entries for one thing split the
+  history between them, so neither accumulates enough evidence to look
+  significant, and the reports built on the catalogue start to lie.
+example_message: |
+  Judge this proposal.
+criteria:
+  - returns the merge verdict rather than accept
+  - names the existing entry it should merge into, by its exact id
+  - proposes the proposal's wording as an alias
+  - returns valid JSON in the requested shape
+forbidden:
+  - accepts the proposal as a new entry
+  - invents an id not present in the existing entries
+mocks:
+  - name: proposal
+    label: The proposed new topic
+    content: |
+      {"name": "Asking for the check", "kind": "situational",
+       "summary": "How to request the bill at the end of a meal"}
+  - name: candidates
+    label: Closest existing entries
+    note: the first one already covers the proposal
+    content: |
+      - id=sit.restaurant.bill | Asking for the bill [situational] | Requesting payment at the end of a meal
+      - id=sit.restaurant.order | Ordering a meal [situational] | Asking for dishes, sides and drinks
+      - id=fun.polite.request | Making a polite request [functional] | Softened asks with would/could
+system_prompt: |
+  You are the gatekeeper for a catalogue of over 1,700 topics. An agent has
+  proposed a new one. Decide whether the catalogue should take it.
+
+  Return ONLY valid JSON:
+  {"verdict": "accept" | "merge" | "reject",
+   "merge_into": "<existing id, only when merging>",
+   "aliases": ["<alias worth adding>"],
+   "reason": "<one sentence>"}
+
+  PROPOSED TOPIC:
+  {proposal}
+
+  CLOSEST EXISTING TOPICS:
+  {candidates}

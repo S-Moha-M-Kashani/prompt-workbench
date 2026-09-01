@@ -43,6 +43,16 @@ to produce. Then you can run the prompt and read what comes back.
 4. **Evaluate, when you ask.** The use case's own criteria are the ground truth,
    so there is no dataset to write. Nothing is scored until you press the button.
 
+Every one-shot response reports what it cost — tokens in and tokens out, kept
+apart, because a longer prompt and a longer answer are different problems and a
+single total hides which one your edit moved.
+
+Sampling settings live in the sidebar. A model that ignores one shows it
+**disabled** rather than hidden: "this model drops `temperature`" is a more
+useful thing to read than a control that quietly is not there. The catalog is
+the single source of truth, so what is greyed out is exactly what the request
+omits.
+
 ## The ten use cases
 
 | Situation | What is mocked | The failure being hunted |

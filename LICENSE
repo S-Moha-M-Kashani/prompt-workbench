@@ -1,0 +1,50 @@
+Prompt Workbench
+
+Copyright (c) 2026 Moha Kashani. All Rights Reserved.
+
+PROPRIETARY LICENSE
+
+This software, "Prompt Workbench", and its source code — including the
+Python package, the Streamlit application, the prompt templates, the tests,
+and all accompanying documentation — are the exclusive property of
+Moha Kashani ("the Author"). Any publication of this code is solely for
+portfolio and demonstration purposes.
+
+The following rights are expressly RESERVED by the Author. No person or
+entity may, without prior written permission from the Author:
+
+  1. Use this software or any portion of it in any project, product,
+     or service, whether commercial or non-commercial.
+
+  2. Copy, reproduce, or extract any portion of this code, including
+     the prompt templates and evaluation data.
+
+  3. Modify, adapt, translate, or create derivative works based on
+     this code.
+
+  4. Distribute, sublicense, publish, transmit, or otherwise transfer
+     this code or any portion of it.
+
+  5. Reverse engineer, decompile, or disassemble this software, except
+     to the extent that such activity is expressly permitted by
+     applicable law.
+
+PERMITTED USE
+
+Viewing this code for personal educational reference is permitted,
+provided no portion is copied, stored, or reproduced beyond what your
+browser or Git client ordinarily caches.
+
+Running the application locally for the sole purpose of evaluating the
+Author's work (e.g. as part of a hiring or review process) is permitted.
+
+NO WARRANTY
+
+This software is provided "as is", without warranty of any kind, express
+or implied. The Author shall not be liable for any claim, damages, or
+other liability arising from the use or inability to use this software.
+Use of the application requires your own model-provider API key; any costs
+incurred through that key are your own responsibility.
+
+To request permission for any use not covered above, contact:
+s.moha.m.kashani@gmail.com

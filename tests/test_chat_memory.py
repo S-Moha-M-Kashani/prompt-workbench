@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from prompt_workbench.core.chat_memory import ContextLimitReached, ThreadStore
-from prompt_workbench.models import ModelSettings, SourceRef, ThreadConfig, sequential_ids
+from prompt_workbench.models import sequential_ids
 
 WHEN = datetime(2026, 3, 1, tzinfo=UTC)
 
@@ -47,33 +47,6 @@ def test_clearing_a_thread_opens_an_empty_replacement() -> None:
     assert store.history(replacement) == ()
     with pytest.raises(KeyError):
         store.history(original)
-
-
-def test_a_thread_remembers_the_configuration_it_was_opened_with() -> None:
-    store = a_store()
-    config = ThreadConfig(
-        candidate=SourceRef(id="cand-1", revision=1),
-        model_id="openai/gpt-4o-mini",
-        settings=ModelSettings(temperature=0.2),
-    )
-    thread_id = store.open("test", config=config)
-    assert store.thread(thread_id).config == config
-
-
-def test_a_thread_is_stale_when_the_live_configuration_has_moved_on() -> None:
-    store = a_store()
-    config = ThreadConfig(
-        candidate=SourceRef(id="cand-1", revision=1), model_id="m", settings=ModelSettings()
-    )
-    thread_id = store.open("test", config=config)
-    same = ThreadConfig(
-        candidate=SourceRef(id="cand-1", revision=1), model_id="m", settings=ModelSettings()
-    )
-    changed = ThreadConfig(
-        candidate=SourceRef(id="cand-1", revision=1), model_id="other", settings=ModelSettings()
-    )
-    assert not store.config_changed(thread_id, same)
-    assert store.config_changed(thread_id, changed)
 
 
 def test_history_that_would_overflow_the_budget_blocks_instead_of_trimming() -> None:

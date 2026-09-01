@@ -1,14 +1,13 @@
-"""Session state, and the two callables the UI needs from the outside world.
+"""Streamlit session state, and the two callables the UI needs from outside.
 
 Streamlit re-runs the whole script on every interaction, so anything that must
 survive a click lives in ``st.session_state``. This module is the only place
-that reaches into it, which keeps the workspace a plain tested object everywhere
-else.
+that reaches into it, which keeps the workbench session a plain tested object
+everywhere else.
 
-Credentials never leave this session. The provider config is built once per
-browser session and passed explicitly into a client that is created per call, so
-two people using one server never share a key and nothing is written to the
-process environment.
+Credentials never leave this browser session: the config is built once and
+passed explicitly into a client created per call, so two people on one server
+never share a key and nothing is written to the process environment.
 """
 
 from __future__ import annotations
@@ -18,8 +17,7 @@ from typing import Any
 import streamlit as st
 
 from prompt_workbench.core.chat_memory import ThreadStore
-from prompt_workbench.core.prompt_registry import load_system_prompt
-from prompt_workbench.core.workspace import Workspace
+from prompt_workbench.core.session import Session
 from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.protocols import CompletionFn, Message
 from prompt_workbench.services import judges, model_catalog, openrouter_client
@@ -31,10 +29,10 @@ def _state() -> Any:
     return st.session_state
 
 
-def workspace() -> Workspace:
-    if "workspace" not in _state():
-        _state().workspace = Workspace()
-    return _state().workspace
+def workbench() -> Session:
+    if "workbench" not in _state():
+        _state().workbench = Session()
+    return _state().workbench
 
 
 def threads() -> ThreadStore:
@@ -53,31 +51,8 @@ def set_provider_config(config: ProviderConfig) -> None:
     _state().provider_config = config
 
 
-def platform_instruction() -> str:
-    """The workbench's own prompt-engineer instruction, as the user has it."""
-    if "platform_instruction" not in _state():
-        _state().platform_instruction = load_system_prompt("platform_instruction")
-    return _state().platform_instruction
-
-
-def set_platform_instruction(text: str) -> None:
-    if text != _state().get("platform_instruction"):
-        _state().platform_instruction = text
-        workspace().platform_instruction_revision += 1
-
-
 def selected_model() -> str:
     return provider_config().default_model or model_catalog.DEFAULT_MODEL_ID
-
-
-def model_settings() -> ModelSettings:
-    if "model_settings" not in _state():
-        _state().model_settings = ModelSettings()
-    return _state().model_settings
-
-
-def set_model_settings(settings: ModelSettings) -> None:
-    _state().model_settings = settings
 
 
 def has_credentials() -> bool:
@@ -90,8 +65,7 @@ def completion() -> CompletionFn:
     Built per call rather than cached: a client holds the key, and a cached one
     would outlive an edit to it in the sidebar.
     """
-    config = provider_config()
-    client = openrouter_client.build_client(config)
+    client = openrouter_client.build_client(provider_config())
 
     def complete(
         messages: list[Message],
@@ -134,7 +108,7 @@ def set_judge_model(model: str) -> None:
 
 
 def judge() -> JudgeFn:
-    """The configured judge, with a client only if the provider backend needs one."""
+    """The configured judge, given a client only if the provider backend needs one."""
     backend = judge_backend()
     client = (
         openrouter_client.build_client(provider_config())

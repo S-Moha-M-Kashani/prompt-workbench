@@ -20,7 +20,7 @@ from datetime import datetime, UTC
 from collections.abc import Callable
 
 from prompt_workbench.core import context_limits
-from prompt_workbench.models.chat import ChatMessage, ChatThread, ThreadConfig
+from prompt_workbench.models.chat import ChatMessage, ChatThread
 from prompt_workbench.models.identifiers import IdFactory, random_id
 
 
@@ -50,11 +50,11 @@ class ThreadStore:
         self._clock = clock
         self._threads: dict[str, ChatThread] = {}
 
-    def open(self, purpose: str, *, config: ThreadConfig | None = None) -> str:
+    def open(self, purpose: str) -> str:
         """Start an empty thread and return its id."""
         thread_id = self._new_id("thread")
         self._threads[thread_id] = ChatThread(
-            id=thread_id, purpose=purpose, created_at=self._clock(), config=config
+            id=thread_id, purpose=purpose, created_at=self._clock()
         )
         return thread_id
 
@@ -87,11 +87,7 @@ class ThreadStore:
         """
         old = self.thread(thread_id)
         del self._threads[thread_id]
-        return self.open(old.purpose, config=old.config)
-
-    def config_changed(self, thread_id: str, current: ThreadConfig) -> bool:
-        """Whether the live configuration differs from what this thread was opened with."""
-        return self.thread(thread_id).config != current
+        return self.open(old.purpose)
 
     def check_budget(
         self, thread_id: str, *, next_message: str, token_budget: int, system_prompt: str = ""

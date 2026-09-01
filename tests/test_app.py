@@ -10,7 +10,12 @@ from pathlib import Path
 from streamlit.testing.v1 import AppTest
 
 import prompt_workbench
-from prompt_workbench.services import codex_cli_client, model_catalog, openrouter_client
+from prompt_workbench.services import (
+    codex_cli_client,
+    model_catalog,
+    openrouter_client,
+    use_case_catalog,
+)
 from prompt_workbench.services.openrouter_client import ProviderConfig
 
 APP = Path(__file__).resolve().parents[1] / "src" / "prompt_workbench" / "app.py"
@@ -61,17 +66,6 @@ def test_app_shows_title_and_version(monkeypatch):
     assert prompt_workbench.__version__ in _rendered(at)
 
 
-def test_all_five_workspace_areas_are_present(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    rendered = _rendered(at)
-    for area in ("Define the use case", "Ground truth", "Candidate system prompts",
-                 "Test a candidate", "Evaluate"):
-        assert area in rendered, f"expected the {area!r} area to render"
-
-
 def test_sidebar_offers_a_key_field_and_a_catalog_model(monkeypatch):
     _without_credentials(monkeypatch)
 
@@ -79,17 +73,6 @@ def test_sidebar_offers_a_key_field_and_a_catalog_model(monkeypatch):
 
     assert at.sidebar.text_input[0].label == "API key"
     assert at.sidebar.selectbox[0].value in {m.id for m in model_catalog.all_models()}
-
-
-def test_the_platform_instruction_is_editable_in_the_sidebar(monkeypatch):
-    """The workbench's own instruction is inspectable, and separate from the
-    candidate prompts under test."""
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    labels = [area.label for area in at.sidebar.text_area]
-    assert "Prompt-engineer instruction" in labels
 
 
 def test_without_a_key_the_app_explains_what_is_disabled(monkeypatch):
@@ -106,23 +89,6 @@ def test_with_a_key_the_setup_notice_disappears(monkeypatch):
     at = AppTest.from_file(APP).run()
 
     assert not any(SETUP_NOTICE in message.value for message in at.info)
-
-
-def test_before_a_brief_is_confirmed_the_other_areas_say_so(monkeypatch):
-    _with_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    assert any("Confirm a brief" in message.value for message in at.info)
-
-
-def test_the_brief_form_offers_every_discovery_field(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    labels = {area.label for area in at.text_area}
-    assert {"Purpose", "Audience", "Constraints", "Failure cases"} <= labels
 
 
 def test_rendering_makes_no_provider_call(monkeypatch):
@@ -154,17 +120,6 @@ def test_rendering_never_spawns_the_local_judge(monkeypatch):
     assert not at.exception
 
 
-def test_the_evaluate_area_states_the_limits_of_a_grade(monkeypatch):
-    """The honest caveats belong next to the controls, not in a document
-    nobody opens."""
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    rendered = _rendered(at)
-    assert "Nothing is scored until you do" in rendered
-
-
 def test_a_missing_local_judge_is_reported_rather_than_assumed(monkeypatch):
     _without_credentials(monkeypatch)
     monkeypatch.setattr(codex_cli_client, "is_available", lambda **_: False)
@@ -173,3 +128,83 @@ def test_a_missing_local_judge_is_reported_rather_than_assumed(monkeypatch):
 
     assert not at.exception
     assert any("not installed" in caption.value for caption in at.sidebar.caption)
+
+
+def test_the_use_case_dropdown_offers_every_shipped_situation(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+
+    # AppTest reports the formatted labels, so compare against those.
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    shipped = use_case_catalog.all_use_cases()
+    assert len(picker.options) == len(shipped)
+    for case in shipped:
+        assert any(case.label in option for option in picker.options), case.key
+
+
+def test_nothing_is_selected_until_the_user_picks(monkeypatch):
+    """The screen must not quietly load a situation the user did not choose."""
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+
+    assert any("Pick a use case" in message.value for message in at.info)
+
+
+def test_picking_a_use_case_writes_its_situation_into_the_chat(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    at = picker.set_value("injection_resistance").run()
+
+    rendered = _rendered(at)
+    assert "Prompt injection" in rendered
+    assert "Obeying it" in rendered, "the trap must be stated, not just the situation"
+
+
+def test_picking_a_use_case_loads_its_prompt_for_editing(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    at = picker.set_value("grounded_briefing").run()
+
+    prompt_box = next(area for area in at.text_area if area.label == "System prompt")
+    assert "{history}" in prompt_box.value, "placeholders stay visible while editing"
+
+
+def test_the_chat_offers_both_modes(monkeypatch):
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    at = picker.set_value("grounded_briefing").run()
+
+    mode = next(radio for radio in at.radio if radio.label == "Mode")
+    assert set(mode.options) == {"Prompt engineer", "End user (one-shot)"}
+
+
+def test_there_is_exactly_one_chat_input(monkeypatch):
+    """One window. The five-area workspace is gone."""
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    at = picker.set_value("grounded_briefing").run()
+
+    assert len(at.chat_input) == 1
+
+
+def test_no_sampling_knobs_are_offered(monkeypatch):
+    """The knobs were removed on purpose: they made tuning the activity."""
+    _without_credentials(monkeypatch)
+
+    at = AppTest.from_file(APP).run()
+    picker = next(box for box in at.selectbox if box.label == "Use case")
+    at = picker.set_value("grounded_briefing").run()
+
+    assert not at.slider
+    labels = {box.label for box in at.selectbox}
+    assert not {"temperature", "top_p", "max_tokens"} & labels

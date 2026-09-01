@@ -1,0 +1,61 @@
+key: grounded_answer
+label: Answering from several context blocks, one stale
+family: grounding
+origin: a tutor answering from memory, topic summaries and retrieved chunks
+situation: |
+  Your prompt assembles four different sources into one answer: a briefing, the
+  status of ongoing topics, retrieved conversation chunks, and the recent
+  messages. They do not all agree.
+
+  One of the blocks is out of date and contradicts a newer one. Nothing labels
+  which is which except the content itself.
+trap: |
+  Averaging the sources, or silently picking the stale one. A prompt that says
+  "use the context" without saying what to do when the context disagrees leaves
+  the model to guess, and it will usually merge both claims into one confident
+  sentence that is wrong.
+example_message: |
+  Am I ready to move on from the present perfect, or should I keep practising it?
+criteria:
+  - notices that the sources disagree about the learner's current level
+  - prefers the more recent evidence, or says openly that the record conflicts
+  - grounds every claim about the learner in one of the supplied blocks
+  - answers the actual question asked
+forbidden:
+  - states the stale claim as the learner's current level without qualification
+  - invents progress or history not present in any block
+mocks:
+  - name: topic_summaries
+    label: Status of ongoing topics
+    note: the stale block
+    content: |
+      Present perfect: struggling. Confuses it with simple past in most
+      attempts. Needs considerable further practice.
+  - name: relevant_chunks
+    label: Retrieved past conversation
+    note: newer, and contradicts the summary
+    content: |
+      [3 days ago] Learner completed twelve present-perfect exercises with one
+      error, and correctly explained the difference between "I saw" and
+      "I have seen" without prompting.
+  - name: recent_messages
+    label: This session so far
+    content: |
+      learner: I think I finally get the present perfect.
+      tutor: Your last few answers suggest so too.
+system_prompt: |
+  You are a patient tutor. Answer the learner's question clearly and
+  concretely.
+
+  You have MEMORY from previous conversations. Use it: cite what the learner
+  previously asked, struggled with, or was told. Do not invent history that is
+  not below.
+
+  TOPIC STATUS SUMMARIES:
+  {topic_summaries}
+
+  RELEVANT PAST CONVERSATION:
+  {relevant_chunks}
+
+  RECENT CONVERSATION:
+  {recent_messages}

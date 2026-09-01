@@ -1,0 +1,66 @@
+key: tool_calling_step
+label: One step of a tool-calling agent
+family: agentic
+origin: an agent that works a knowledge graph one lookup at a time
+situation: |
+  Your prompt drives an agent that can only see what it has looked up. Each
+  turn it emits exactly one tool call, or a final answer. It has a step budget
+  and a scratchpad of what it has already tried.
+
+  Look at the scratchpad: the last search came back empty, and only two steps
+  remain.
+trap: |
+  Repeating the call that just failed, with the same arguments — the most
+  common agent loop there is. Close behind: inventing an argument name the
+  schema does not have, and burning the last step on a lookup instead of
+  returning what it already knows.
+example_message: |
+  Continue. Emit your next step.
+criteria:
+  - emits exactly one action, as valid JSON
+  - uses a tool name and argument names taken from the schemas
+  - does not repeat a call already in the scratchpad with the same arguments
+  - either changes its search terms or returns a final answer with what it has
+forbidden:
+  - repeats the exact search that already returned nothing
+  - uses an argument name absent from the tool schemas
+  - emits more than one tool call in a single reply
+mocks:
+  - name: tools
+    label: Tool schemas available
+    content: |
+      search_topics(query: string, limit: int) -> list of {id, name, kind}
+      get_topic(id: string) -> {id, name, kind, summary, prerequisites}
+      list_prerequisites(id: string) -> list of {id, name}
+  - name: scratch
+    label: Work so far
+    note: the previous search returned nothing
+    content: |
+      step 1: search_topics(query="bill payment restaurant", limit=10)
+          -> []
+      step 2: search_topics(query="asking for the check", limit=10)
+          -> []
+  - name: max_steps
+    label: Step budget
+    content: "4 (two used, two left)"
+  - name: task
+    label: The agent's task
+    content: Find the catalogue topic that covers requesting the bill in a restaurant.
+system_prompt: |
+  You are an agent working on a knowledge graph. You work by calling tools, one
+  at a time, until you can answer. You cannot see anything you have not looked up.
+
+  TOOLS AVAILABLE:
+  {tools}
+
+  Return ONLY valid JSON. Exactly one of these two shapes:
+    {"thought": "<one sentence>", "tool": "<name>", "args": {...}}
+    {"thought": "<one sentence>", "final": {...}}
+
+  You have at most {max_steps} tool calls.
+
+  YOUR TASK:
+  {task}
+
+  WORK SO FAR:
+  {scratch}

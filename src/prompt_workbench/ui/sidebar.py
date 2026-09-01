@@ -1,20 +1,20 @@
-"""Provider settings and the workbench's own instruction.
+"""Provider access and the judge. Nothing about the prompt lives here.
 
-The API key lives in this browser session and is passed explicitly into a client
-per call. It is never written to the process environment, so two people using
-one deployment cannot end up on each other's credentials.
+Kept deliberately thin: the previous design spread sampling knobs across five
+areas, which turned tuning into the activity and left the prompt as an
+afterthought. The prompt is the subject of this application, so the sidebar
+holds only what it takes to reach a model at all.
 """
 
 from __future__ import annotations
 
 import streamlit as st
 
-from prompt_workbench.core.workspace import Workspace
-from prompt_workbench.services import codex_cli_client, model_catalog, openrouter_client
+from prompt_workbench.services import codex_cli_client, judges, model_catalog, openrouter_client
 from prompt_workbench.ui import session
 
 
-def render(workspace: Workspace) -> None:
+def render() -> None:
     st.header("Provider")
     config = session.provider_config()
 
@@ -26,7 +26,7 @@ def render(workspace: Workspace) -> None:
     )
     model_ids = [model.id for model in model_catalog.all_models()]
     index = model_ids.index(config.default_model) if config.default_model in model_ids else 0
-    model_id = st.selectbox("Model", model_ids, index=index)
+    model_id = st.selectbox("Model under test", model_ids, index=index)
     st.caption(model_catalog.get(model_id).note)
 
     session.set_provider_config(
@@ -36,26 +36,19 @@ def render(workspace: Workspace) -> None:
     )
 
     st.divider()
-    st.caption(
-        "Local judge: "
-        + ("`codex` found" if codex_cli_client.is_available() else "`codex` not installed")
+    st.subheader("Judge")
+    backends = judges.available_backends()
+    backend = st.selectbox(
+        "Backend", backends, format_func=lambda b: judges.BACKEND_LABELS[b], key="judge_backend_pick"
     )
-
-    with st.expander("Advanced: platform instruction"):
-        st.caption(
-            "How the workbench itself conducts discovery and writes artifacts. "
-            "This is not a candidate prompt — those live in the Candidates tab."
-        )
-        text = st.text_area(
-            "Prompt-engineer instruction",
-            value=session.platform_instruction(),
-            height=240,
-            label_visibility="collapsed",
-        )
-        session.set_platform_instruction(text)
-        st.caption(f"Revision {workspace.platform_instruction_revision}")
-
-    stale = workspace.stale_artifacts()
-    if stale:
-        st.divider()
-        st.warning("**Out of date**\n\n" + "\n\n".join(f"- {item}" for item in stale))
+    session.set_judge_backend(backend)
+    judge_model = st.selectbox(
+        "Judge model", judges.models_for(backend), key=f"judge_model_pick_{backend}"
+    )
+    session.set_judge_model(judge_model)
+    st.caption(
+        ("`codex` found on this machine. " if codex_cli_client.is_available()
+         else "`codex` not installed. ")
+        + "Judging with a model other than the one under test keeps a prompt "
+        "from being graded by the model that wrote its output."
+    )

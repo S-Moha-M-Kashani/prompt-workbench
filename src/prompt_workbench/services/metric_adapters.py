@@ -141,8 +141,8 @@ def build_judge_messages(metric: MetricDefinition, evidence: EvaluationEvidence)
             "content": (
                 f"Metric: {metric.name}\n"
                 f"Rubric:\n{metric.rubric}\n\n"
-                f"--- Brief ---\n{evidence.brief_context}\n\n"
-                f"--- Candidate system prompt under test ---\n{evidence.candidate_prompt}\n\n"
+                f"--- The situation ---\n{evidence.situation}\n\n"
+                f"--- System prompt under test ---\n{evidence.system_prompt}\n\n"
                 f"--- Test case expectations ---\n{evidence.case.as_expectations()}\n\n"
                 f"--- User message sent ---\n{evidence.user_message}\n\n"
                 f"--- Response to score ---\n{evidence.response}"

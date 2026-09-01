@@ -19,7 +19,6 @@ from datetime import datetime
 
 from prompt_workbench.models.ground_truth import GroundTruthCase
 from prompt_workbench.models.metrics import MetricDefinition
-from prompt_workbench.models.provenance import SourceRef
 
 # Coarse bands, wide on purpose: a judge model's scores are not precise enough
 # to justify finer distinctions, and a "B+" would imply they were.
@@ -42,10 +41,10 @@ class EvaluationEvidence:
     and pick up an artifact that has changed since the run began.
     """
 
-    brief_context: str
+    situation: str
     output_format: str
     case: GroundTruthCase
-    candidate_prompt: str
+    system_prompt: str
     user_message: str
     response: str
 
@@ -128,7 +127,7 @@ class Grade:
 class CaseEvaluation:
     """Every metric's verdict on one response, and the weighted result."""
 
-    execution_id: str
+    run_id: str
     case_id: str
     scores: tuple[MetricScore, ...]
     grade: float | None
@@ -144,9 +143,8 @@ class EvaluationRun:
 
     id: str
     created_at: datetime
-    candidate: SourceRef
-    source_brief: SourceRef
-    source_dataset: SourceRef
+    use_case_key: str
+    prompt_revision: int
     metrics: tuple[MetricDefinition, ...]
     judge_backend: str
     judge_model: str

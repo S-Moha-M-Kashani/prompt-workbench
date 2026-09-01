@@ -19,10 +19,10 @@ def evidence(response: str, *, output_format: str = "", **case_overrides: object
     }
     fields.update(case_overrides)
     return EvaluationEvidence(
-        brief_context="Purpose: answer support tickets",
+        situation="You answer support tickets from an unhappy customer.",
         output_format=output_format,
         case=GroundTruthCase(**fields),  # type: ignore[arg-type]
-        candidate_prompt="You are a support assistant.",
+        system_prompt="You are a support assistant.",
         user_message="My order never arrived.",
         response=response,
     )

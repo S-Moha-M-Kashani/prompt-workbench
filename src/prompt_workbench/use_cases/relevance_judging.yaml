@@ -1,4 +1,5 @@
 key: relevance_judging
+task_type: judging
 label: Judging which retrieved chunks are relevant
 family: grounding
 origin: a memory system that judges its own retrieval hits before answering

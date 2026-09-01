@@ -1,15 +1,11 @@
 """Token accounting: what a run cost, reported in and out separately."""
 
-from datetime import UTC, datetime
-
 import pytest
 
 from prompt_workbench.core import one_shot
-from prompt_workbench.models import ModelSettings, PromptRun, TokenUsage, sequential_ids
-from prompt_workbench.services import model_catalog, openrouter_client
-from prompt_workbench.services.use_case_catalog import get as get_use_case
+from prompt_workbench.models import ModelSettings, TokenUsage
+from prompt_workbench.services import model_registry, openrouter_client
 
-WHEN = datetime(2026, 3, 1, tzinfo=UTC)
 
 
 class FakeUsage:
@@ -81,42 +77,39 @@ def test_a_provider_that_reports_no_usage_yields_zeros_rather_than_failing() -> 
     assert usage == TokenUsage()
 
 
-def test_settings_a_model_ignores_are_not_sent_to_the_provider() -> None:
-    """The catalog already knows; the request should never ask for a knob that
-    would be silently dropped."""
+def test_only_the_settings_that_were_set_are_sent() -> None:
+    """Capability filtering lives in the registry and the interface, not here.
+    A second filter in the client would be a second source of truth, and the one
+    most likely to go stale since nobody looks at it."""
     client = FakeClient(FakeResponse("hi", FakeUsage(1, 1)))
     openrouter_client.chat_completion_with_usage(
         [{"role": "user", "content": "hi"}],
         client=client,
-        model="openai/gpt-5-mini",
+        model="openai/gpt-4o-mini",
         settings=ModelSettings(temperature=0.7, max_tokens=100),
     )
     sent = client.calls[0]
-    assert "temperature" not in sent, "a reasoning model ignores sampling"
+    assert sent["temperature"] == 0.7
     assert sent["max_tokens"] == 100
+    assert "top_p" not in sent, "an unset field keeps the model's own default"
 
 
-# --- what a run records ---------------------------------------------------
+# --- what a call reports -------------------------------------------------
 
 
-def test_a_run_records_the_tokens_it_cost() -> None:
+def test_a_call_reports_the_tokens_it_cost() -> None:
     def complete(messages, *, model=None, settings=None):  # type: ignore[no-untyped-def]
         return "a response", TokenUsage(tokens_in=200, tokens_out=45)
 
-    record = one_shot.run_once(
-        use_case=get_use_case("grounded_briefing"),
-        prompt_under_test=get_use_case("grounded_briefing").system_prompt,
-        prompt_revision=1,
+    text, usage = one_shot.run_plain(
+        system_prompt="You are a classifier.",
         user_message="what do you know?",
         model="openai/gpt-4o-mini",
         settings=ModelSettings(),
         complete=complete,
-        new_id=sequential_ids(),
-        clock=lambda: WHEN,
     )
-    assert record.usage.tokens_in == 200
-    assert record.usage.tokens_out == 45
-    assert record.usage.total == 245
+    assert text == "a response"
+    assert (usage.tokens_in, usage.tokens_out, usage.total) == (200, 45, 245)
 
 
 def test_the_settings_reach_the_call() -> None:
@@ -126,51 +119,54 @@ def test_the_settings_reach_the_call() -> None:
         seen["settings"] = settings
         return "ok", TokenUsage()
 
-    one_shot.run_once(
-        use_case=get_use_case("grounded_briefing"),
-        prompt_under_test=get_use_case("grounded_briefing").system_prompt,
-        prompt_revision=1,
-        user_message="hi",
-        model="openai/gpt-4o-mini",
-        settings=ModelSettings(temperature=0.2, max_tokens=500),
-        complete=complete,
-        new_id=sequential_ids(),
-        clock=lambda: WHEN,
+    one_shot.run_plain(
+        system_prompt="p", user_message="hi", model="openai/gpt-4o-mini",
+        settings=ModelSettings(temperature=0.2, max_tokens=500), complete=complete,
     )
     assert seen["settings"].temperature == 0.2
     assert seen["settings"].max_tokens == 500
 
 
-def test_a_run_with_no_reported_usage_still_records() -> None:
+def test_a_call_with_no_reported_usage_still_returns_its_text() -> None:
     def complete(messages, *, model=None, settings=None):  # type: ignore[no-untyped-def]
         return "ok", TokenUsage()
 
-    record = one_shot.run_once(
-        use_case=get_use_case("grounded_briefing"),
-        prompt_under_test=get_use_case("grounded_briefing").system_prompt,
-        prompt_revision=1,
-        user_message="hi",
-        model="m",
-        settings=None,
-        complete=complete,
-        new_id=sequential_ids(),
-        clock=lambda: WHEN,
+    text, usage = one_shot.run_plain(
+        system_prompt="p", user_message="hi", model="m", settings=None, complete=complete,
     )
-    assert record.usage.total == 0
-    assert record.is_scoreable
+    assert text == "ok"
+    assert usage.total == 0
+
+
+def test_an_empty_response_is_refused_rather_than_recorded() -> None:
+    def complete(messages, *, model=None, settings=None):  # type: ignore[no-untyped-def]
+        return "   ", TokenUsage()
+
+    with pytest.raises(one_shot.RunFailed, match="empty response"):
+        one_shot.run_plain(
+            system_prompt="p", user_message="hi", model="m", settings=None, complete=complete,
+        )
 
 
 # --- which knobs a model honours -----------------------------------------
 
 
-def test_the_catalog_says_which_settings_a_reasoning_model_drops() -> None:
-    assert not model_catalog.supports("openai/gpt-5-mini", "temperature")
-    assert model_catalog.supports("openai/gpt-5-mini", "max_tokens")
-    assert model_catalog.supports("openai/gpt-4o-mini", "temperature")
+def _registry() -> model_registry.ModelRegistry:
+    """The snapshot, which is what the suite reads — never the live list."""
+    return model_registry.ModelRegistry(
+        fetch=lambda: (_ for _ in ()).throw(RuntimeError("offline"))
+    )
+
+
+def test_the_registry_says_which_settings_a_reasoning_model_drops() -> None:
+    registry = _registry()
+    assert not registry.supports("openai/gpt-5-mini", "temperature")
+    assert registry.supports("openai/gpt-5-mini", "max_tokens")
+    assert registry.supports("openai/gpt-4o-mini", "temperature")
 
 
 def test_ignored_settings_names_exactly_what_would_be_dropped() -> None:
-    ignored = model_catalog.ignored_settings(
+    ignored = _registry().ignored_settings(
         "openai/gpt-5-mini", ModelSettings(temperature=0.7, top_p=0.9, max_tokens=100)
     )
     assert set(ignored) == {"temperature", "top_p"}

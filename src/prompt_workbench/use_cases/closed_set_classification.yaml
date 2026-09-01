@@ -1,4 +1,5 @@
 key: closed_set_classification
+task_type: classification
 label: Classify against a closed set of ids
 family: structure
 origin: a tutoring app tagging lesson summaries onto a 1,700-topic graph

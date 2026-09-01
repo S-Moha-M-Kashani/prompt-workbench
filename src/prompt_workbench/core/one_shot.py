@@ -1,60 +1,38 @@
-"""The end-user side of the chat: one message in, one response out.
+"""One prompt, one message, one response — and no history.
 
-No history, by construction. That is what makes the response evidence about the
-prompt rather than about the conversation: the model sees the prompt under test
-with its mocks filled in, one user message, and nothing else. Send the same
-message twice and the only thing that changed is the prompt.
-
-It is the counterpart to the engineer mode, which keeps a full conversation.
-Mixing the two — a prompt tested inside a chat that has been going for ten
-turns — is how a prompt appears to work because of something said earlier.
+That absence is the point. A sweep compares variants and models by running the
+same inputs through each, so anything carried between calls would show up as a
+difference between configurations that is not actually a difference between
+them. The model sees a system prompt, one user message, and nothing else.
 """
 
-from collections.abc import Callable
-from datetime import datetime
 
-from prompt_workbench.models.identifiers import IdFactory
 from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.protocols import CompletionWithUsageFn
-from prompt_workbench.models.runs import PromptRun
-from prompt_workbench.models.use_case import UseCase
+from prompt_workbench.models.usage import TokenUsage
 
 
 class RunFailed(RuntimeError):
     """The one-shot call produced nothing worth recording."""
 
 
-def run_once(
+def run_plain(
     *,
-    use_case: UseCase,
-    prompt_under_test: str,
-    prompt_revision: int,
+    system_prompt: str,
     user_message: str,
     model: str,
-    settings: ModelSettings | None = None,
+    settings: ModelSettings | None,
     complete: CompletionWithUsageFn,
-    new_id: IdFactory,
-    clock: Callable[[], datetime],
-) -> PromptRun:
-    """Send one message under the prompt under test and record what came back.
+) -> tuple[str, TokenUsage]:
+    """One call, returning the text and what it cost. No record, no use case.
 
-    The mocks are substituted here, at the last moment, so the panel keeps
-    showing the prompt with its placeholders — the form the user is editing —
-    while the model receives the filled version.
+    What a sweep needs: it runs the same prompt over many cases on many models
+    and keeps its own tally, so building a full ``PromptRun`` for each of a
+    hundred and twenty calls would be bookkeeping nobody reads.
     """
     if not user_message.strip():
         raise RunFailed("Nothing was sent: the message is empty")
 
-    missing = use_case.unfilled_placeholders(prompt_under_test)
-    if missing:
-        named = ", ".join(f"{{{name}}}" for name in missing)
-        raise RunFailed(
-            f"The prompt refers to {named}, which this use case supplies no mock "
-            "for. It would reach the model as literal text — remove it, or use "
-            "one of the placeholders listed in the situation."
-        )
-
-    system_prompt = use_case.filled_prompt(prompt_under_test)
     raw, usage = complete(
         [
             {"role": "system", "content": system_prompt},
@@ -64,21 +42,6 @@ def run_once(
         settings=settings,
     )
     response = raw.strip()
-
     if not response:
-        raise RunFailed(
-            "The model returned an empty response. Nothing was recorded, so the "
-            "prompt and the run history are unchanged."
-        )
-
-    return PromptRun(
-        id=new_id("run"),
-        use_case_key=use_case.key,
-        prompt_revision=prompt_revision,
-        system_prompt=system_prompt,
-        model_id=model,
-        user_message=user_message,
-        response=response,
-        created_at=clock(),
-        usage=usage,
-    )
+        raise RunFailed(f"{model} returned an empty response")
+    return response, usage

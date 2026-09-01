@@ -61,6 +61,7 @@ def _load_one(path: Path) -> UseCase:
         forbidden=_as_tuple(data.get("forbidden")),
         origin=str(data.get("origin", "")).strip(),
         notes=str(data.get("notes", "")).strip(),
+        task_type=str(data.get("task_type", "")).strip(),
     )
 
 

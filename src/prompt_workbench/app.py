@@ -1,8 +1,11 @@
 """Streamlit entry point — layout and wiring only.
 
-One screen: pick a situation, read or edit the prompt it starts from, and talk.
-Everything it could decide has been pushed into ``core`` so it can be tested
-without a browser.
+One page, walked top to bottom: describe the case, get test cases, write prompt
+variants for that kind of job, choose the metrics, sweep them against models
+cheapest-first, and keep the least expensive configuration that passed.
+
+Everything this file could decide has been pushed into ``core`` so it can be
+tested without a browser.
 """
 
 import streamlit as st
@@ -16,10 +19,9 @@ st.title("Prompt Workbench")
 st.caption(f"v{__version__}")
 
 st.markdown(
-    "Find the prompt that makes a job come out right. Pick a real situation — "
-    "its knowledge base, candidate lists and tool schemas already mocked — then "
-    "work on the prompt with an engineer, run it as the end user, and examine "
-    "what comes back."
+    "Find a prompt, a model, settings and metrics you can defend — then write "
+    "those metrics into the project that ships, where the same library will "
+    "produce the same numbers."
 )
 
 with st.sidebar:
@@ -27,8 +29,9 @@ with st.sidebar:
 
 if not session.has_credentials():
     st.info(
-        "Add a provider API key in the sidebar to enable the chat. Use cases and "
-        "prompts stay readable and editable without a key."
+        "Add a provider API key in the sidebar to **generate** cases and variants, "
+        "and to run a sweep. Without one you can still write cases and paste in a "
+        "prompt you already have — the whole page stays usable."
     )
 
 workbench.render()

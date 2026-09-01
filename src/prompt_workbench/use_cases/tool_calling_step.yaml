@@ -1,4 +1,5 @@
 key: tool_calling_step
+task_type: agentic
 label: One step of a tool-calling agent
 family: agentic
 origin: an agent that works a knowledge graph one lookup at a time

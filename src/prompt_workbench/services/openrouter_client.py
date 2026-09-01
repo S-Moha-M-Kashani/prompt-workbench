@@ -24,7 +24,6 @@ from openai import OpenAI
 from prompt_workbench.models import ModelSettings
 from prompt_workbench.models.protocols import Message
 from prompt_workbench.models.usage import TokenUsage
-from prompt_workbench.services import model_catalog
 
 API_KEY_ENV = "PROVIDER_API_KEY"
 BASE_URL_ENV = "PROVIDER_BASE_URL"
@@ -87,25 +86,23 @@ def build_client(config: ProviderConfig) -> OpenAI:
 def _create_params(
     model: str | None, messages: list[Message], settings: ModelSettings | None
 ) -> dict[str, Any]:
-    """Build kwargs for ``create``; send only set fields the model honours.
+    """Build kwargs for ``create``; send only the fields that were set.
 
     ``ModelSettings`` field names match the provider parameters, so a ``None``
-    field is simply omitted and the model keeps its own default. Fields the
-    catalog says ``model`` ignores are dropped too, so the request only ever
-    asks for what will actually take effect.
+    field is simply omitted and the model keeps its own default.
+
+    Capability filtering happens upstream, not here. ``model_registry`` holds
+    the provider's own statement of what each model accepts and the interface
+    only ever stores settings a model honours, so a second filter in this module
+    would be a second source of truth — and the one most likely to go stale,
+    since it is the one nobody looks at.
     """
     if not model:
         raise ValueError("No model selected for this call")
 
     params: dict[str, Any] = {"model": model, "messages": messages}
     if settings is not None:
-        params.update(
-            {
-                k: v
-                for k, v in asdict(settings).items()
-                if v is not None and model_catalog.supports(model, k)
-            }
-        )
+        params.update({k: v for k, v in asdict(settings).items() if v is not None})
     return params
 
 

@@ -1,4 +1,5 @@
 key: grounded_answer
+task_type: grounded_qa
 label: Answering from several context blocks, one stale
 family: grounding
 origin: a tutor answering from memory, topic summaries and retrieved chunks

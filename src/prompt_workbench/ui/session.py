@@ -1,13 +1,11 @@
-"""Streamlit session state, and the two callables the UI needs from outside.
+"""Streamlit session state, and the callables the UI needs from outside.
 
-Streamlit re-runs the whole script on every interaction, so anything that must
-survive a click lives in ``st.session_state``. This module is the only place
-that reaches into it, which keeps the workbench session a plain tested object
-everywhere else.
+Streamlit re-runs the script on every interaction, so anything that must survive
+a click lives in ``st.session_state``. This is the only module that touches it,
+which keeps the workbench session a plain tested object everywhere else.
 
 Credentials never leave this browser session: the config is built once and
-passed explicitly into a client created per call, so two people on one server
-never share a key and nothing is written to the process environment.
+passed explicitly into a client created per call.
 """
 
 from __future__ import annotations
@@ -16,30 +14,49 @@ from typing import Any
 
 import streamlit as st
 
-from prompt_workbench.core.chat_memory import ThreadStore
 from prompt_workbench.core.session import Session
 from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.protocols import CompletionFn, CompletionWithUsageFn, Message
-from prompt_workbench.services import judges, model_catalog, openrouter_client
 from prompt_workbench.models.usage import TokenUsage
-from prompt_workbench.services.metric_adapters import JudgeFn
+from prompt_workbench.services import deepeval_judge, model_registry, openrouter_client
 from prompt_workbench.services.openrouter_client import ProviderConfig
+
+# The model the workbench itself uses to write cases and variants. Distinct from
+# the models under test: a weak writer produces weak variants and makes every
+# comparison downstream noisier.
+AUTHORING_MODEL = "openai/gpt-4o-mini"
 
 
 def _state() -> Any:
     return st.session_state
 
 
+@st.cache_data(ttl=3600, show_spinner="Fetching current model prices…")
+def _cached_model_list() -> dict:
+    """The provider's model list, at most once an hour across all sessions.
+
+    Cached and spinnered because it happens during the first render: without
+    this the page sits blank while a network call completes, which reads as a
+    broken app rather than a slow one. Prices do not move hourly, so an hour is
+    a generous freshness bar for a number used to order a list.
+
+    A failure propagates rather than being cached, and the registry falls back
+    to the committed snapshot.
+    """
+    return model_registry.fetch_live()
+
+
+def registry() -> model_registry.ModelRegistry:
+    """One catalogue per browser session, over an hourly shared fetch."""
+    if "registry" not in _state():
+        _state().registry = model_registry.ModelRegistry(fetch=_cached_model_list)
+    return _state().registry
+
+
 def workbench() -> Session:
     if "workbench" not in _state():
-        _state().workbench = Session()
+        _state().workbench = Session(registry=registry())
     return _state().workbench
-
-
-def threads() -> ThreadStore:
-    if "threads" not in _state():
-        _state().threads = ThreadStore()
-    return _state().threads
 
 
 def provider_config() -> ProviderConfig:
@@ -52,30 +69,16 @@ def set_provider_config(config: ProviderConfig) -> None:
     _state().provider_config = config
 
 
-def selected_model() -> str:
-    return provider_config().default_model or model_catalog.DEFAULT_MODEL_ID
-
-
 def has_credentials() -> bool:
     return provider_config().has_api_key
 
 
-def model_settings() -> ModelSettings:
-    if "model_settings" not in _state():
-        _state().model_settings = ModelSettings()
-    return _state().model_settings
-
-
-def set_model_settings(settings: ModelSettings) -> None:
-    _state().model_settings = settings
+def authoring_model() -> str:
+    return provider_config().default_model or AUTHORING_MODEL
 
 
 def completion() -> CompletionFn:
-    """A provider call bound to this session's credentials.
-
-    Built per call rather than cached: a client holds the key, and a cached one
-    would outlive an edit to it in the sidebar.
-    """
+    """A provider call bound to this session's credentials."""
     client = openrouter_client.build_client(provider_config())
 
     def complete(
@@ -88,7 +91,7 @@ def completion() -> CompletionFn:
         return openrouter_client.chat_completion(
             messages,
             client=client,
-            model=model or selected_model(),
+            model=model or authoring_model(),
             settings=settings,
             response_format=response_format,
         )
@@ -97,11 +100,7 @@ def completion() -> CompletionFn:
 
 
 def completion_with_usage() -> CompletionWithUsageFn:
-    """A provider call that also reports what it cost.
-
-    Used by the one-shot runner, which is the mode whose cost is worth showing:
-    it is the one that sends the prompt under test.
-    """
+    """A provider call that also reports what it cost."""
     client = openrouter_client.build_client(provider_config())
 
     def complete(
@@ -111,7 +110,7 @@ def completion_with_usage() -> CompletionWithUsageFn:
         settings: ModelSettings | None = None,
     ) -> tuple[str, TokenUsage]:
         return openrouter_client.chat_completion_with_usage(
-            messages, client=client, model=model or selected_model(), settings=settings
+            messages, client=client, model=model or authoring_model(), settings=settings
         )
 
     return complete
@@ -119,7 +118,7 @@ def completion_with_usage() -> CompletionWithUsageFn:
 
 def judge_backend() -> str:
     if "judge_backend" not in _state():
-        _state().judge_backend = judges.available_backends()[0]
+        _state().judge_backend = deepeval_judge.available_backends()[0]
     return _state().judge_backend
 
 
@@ -131,7 +130,7 @@ def judge_model() -> str:
     backend = judge_backend()
     key = f"judge_model_{backend}"
     if key not in _state():
-        _state()[key] = judges.default_model_for(backend)
+        _state()[key] = deepeval_judge.models_for(backend)[0]
     return _state()[key]
 
 
@@ -139,12 +138,8 @@ def set_judge_model(model: str) -> None:
     _state()[f"judge_model_{judge_backend()}"] = model
 
 
-def judge() -> JudgeFn:
-    """The configured judge, given a client only if the provider backend needs one."""
-    backend = judge_backend()
-    client = (
-        openrouter_client.build_client(provider_config())
-        if backend == judges.PROVIDER_BACKEND and has_credentials()
-        else None
+def judge() -> Any:
+    """The configured deepeval judge model."""
+    return deepeval_judge.build(
+        judge_backend(), model=judge_model(), config=provider_config()
     )
-    return judges.build_judge(backend, model=judge_model(), client=client)

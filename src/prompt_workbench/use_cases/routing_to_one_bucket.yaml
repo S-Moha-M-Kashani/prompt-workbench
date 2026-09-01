@@ -1,4 +1,5 @@
 key: routing_to_one_bucket
+task_type: routing
 label: Routing an item to exactly one existing bucket
 family: structure
 origin: a tracker that assigns each exchange to one topic, new or existing

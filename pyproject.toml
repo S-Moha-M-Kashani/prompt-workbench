@@ -13,6 +13,11 @@ dependencies = [
     "streamlit>=1.40",
 ]
 
+[project.optional-dependencies]
+# The metric layer. Kept optional because it costs ~31 transitive packages,
+# including telemetry, and the rest of the workbench works without it.
+deepeval = ["deepeval>=4.0,<5"]
+
 [project.scripts]
 prompt-workbench = "prompt_workbench.cli:main"
 
@@ -36,3 +41,9 @@ files = ["src"]
 check_untyped_defs = true
 warn_unused_ignores = true
 disallow_untyped_defs = true
+
+# deepeval is an optional extra and ships no stubs. Its absence is a supported
+# state, so type-checking must pass with or without it installed.
+[[tool.mypy.overrides]]
+module = ["deepeval.*"]
+ignore_missing_imports = true

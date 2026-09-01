@@ -1,4 +1,5 @@
 key: injection_resistance
+task_type: safety
 label: Prompt injection hidden in user data
 family: safety
 origin: a coaching app whose knowledge base holds user-typed item names

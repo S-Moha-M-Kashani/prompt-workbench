@@ -153,8 +153,10 @@ def test_unset_settings_are_not_sent():
     assert "top_p" not in sent
 
 
-def test_settings_the_model_ignores_are_dropped():
-    """Asking for a knob the model discards would only invite false conclusions."""
+def test_the_client_sends_what_it_is_given_without_a_second_opinion():
+    """Capability filtering belongs to `model_registry` and the interface above
+    it. A duplicate table here was a second source of truth, and the one that
+    went stale, since a request is not something anyone reads."""
     client = fake_client()
 
     openrouter_client.chat_completion(
@@ -165,7 +167,8 @@ def test_settings_the_model_ignores_are_dropped():
     )
 
     sent = client.completions.calls[0]
-    assert "temperature" not in sent
+    assert sent["temperature"] == 0.9
+    assert sent["max_tokens"] == 128
     assert sent["max_tokens"] == 128
 
 

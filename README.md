@@ -1,94 +1,126 @@
 # Prompt Workbench
 
-A [Streamlit](https://streamlit.io/) workspace for finding the prompt that makes
-a job come out right. Pick one of ten real prompt-engineering situations — its
-knowledge base, candidate lists and tool schemas already mocked — then work on
-the prompt with an engineer, run it as the end user, and examine what comes
-back.
+A [Streamlit](https://streamlit.io/) workspace for arriving at a prompt
+configuration you can defend — a prompt, a model, its settings, and the
+[deepeval](https://github.com/confident-ai/deepeval) metrics and thresholds that
+say whether it still works — and then writing those metrics into the project
+that ships.
 
 Built by [Moha Kashani](mailto:s.moha.m.kashani@gmail.com) as a demonstration of
 production-minded LLM application engineering.
 
-> **Status:** early. The ten use cases, both chat modes, and evaluation work
-> and are covered by an offline test suite. Nothing persists beyond the browser
+> **Status:** early. The flow from a described case to a ranked sweep works and
+> is covered by an offline test suite. Nothing persists beyond the browser
 > session.
+
+![A described case, its task type, the verdict on whether this job should be a prompt at all, and the models that suit it — cheapest first, at live prices](assets/workbench.jpg)
 
 ## The idea
 
-A prompt is only judgeable inside a situation. "What should this classifier's
-prompt say?" has no answer until you know what the candidate list looks like,
-how near the distractors are, and what happens when the list comes back empty.
-Those surroundings normally come from a whole application, which is why prompts
-usually get written blind.
+A prompt on its own is not a deliverable. What you actually need is a
+*configuration you can defend*: a prompt, a model, its settings, and the metrics
+and thresholds that say whether it still works — so the same metrics can go into
+an automated test in the project that ships.
 
-So each use case here brings its own world, already mocked — a knowledge base, a
-candidate list, tool schemas, prior state — and states the failure it is known
-to produce. Then you can run the prompt and read what comes back.
+Two things make that possible here. The workbench knows what **kind of job** the
+prompt does, so it can suggest the approaches, models and measurements that suit
+it rather than a fixed list applied to everything. And it knows what things
+**cost**, from the provider's live prices, so "the cheapest thing that works" is
+arithmetic instead of an opinion.
 
 ## The workflow
 
-1. **Pick a use case.** The dropdown holds ten real situations. Picking one
-   writes an explanation into the chat: what the job is, what usually goes
-   wrong, what has been mocked for you, and what a good response must do.
-2. **Read the prompt it starts from.** One collapsed panel above the chat. Every
-   use case starts from a prompt that is plausible and imperfect — usually the
-   one with the failure still in it.
-3. **Work on it in the chat**, in either of two modes:
-   - **Prompt engineer** — discusses the problem across turns and hands back a
-     *complete* replacement prompt you apply in one click. Never a diff:
-     reassembling a prompt by hand is how a placeholder goes missing.
-   - **End user (one-shot)** — one message in, one response out, no history. The
-     response reflects the prompt and the mocks and nothing else, so sending the
-     same message twice tells you what your edit actually changed.
-4. **Evaluate, when you ask.** The use case's own criteria are the ground truth,
-   so there is no dataset to write. Nothing is scored until you press the button.
+1. **Describe your case.** Free text. A task type is proposed from it and stays
+   overridable — it is the choice everything downstream follows from.
+2. **Get test cases.** Generated from the description, and yours to edit. A case
+   you would not have written is a measurement you should not trust.
+3. **Write the variants.** One prompt per approach, chosen for that kind of job:
+   a classifier gets strict enumeration, few-shot over its real labels and a
+   JSON schema; a drafting job gets outline-then-write and named anti-patterns.
+4. **Choose the metrics.** deepeval metrics, suggested for the task type at
+   starting thresholds, with the constructor shown as you tune it.
+5. **Sweep.** Pick variants and models, see the call count and estimated cost
+   *before* anything is spent, then run. Results rank by score with cost
+   breaking ties, and the cheapest configuration clearing every threshold is
+   named.
+6. **Carry it across.** Paste the metric code into the project that ships.
+   Nothing is exported to disk — you write it deliberately, where it belongs.
 
-Every one-shot response reports what it cost — tokens in and tokens out, kept
-apart, because a longer prompt and a longer answer are different problems and a
-single total hides which one your edit moved.
+Ten worked situations, drawn from real production prompts, are available as
+starting points under "Start from an example". They show what a well-shaped case
+looks like; they are not what the workbench is for.
 
-Sampling settings live in the sidebar. A model that ignores one shows it
-**disabled** rather than hidden: "this model drops `temperature`" is a more
-useful thing to read than a control that quietly is not there. The catalog is
-the single source of truth, so what is greyed out is exactly what the request
-omits.
+## The ten kinds of job
 
-## The ten use cases
-
-| Situation | What is mocked | The failure being hunted |
+| Task type | Settings it wants | Fine-tune verdict |
 | --- | --- | --- |
-| Judging retrieved chunks | a result set with near-miss distractors | waves everything through; drops an id |
-| Grounded briefing | a history block that is **empty** | invents a history that was never there |
-| Answering from several contexts | four blocks, one stale and contradicting | states the stale claim as current |
-| Classify against a closed set | candidate ids incl. a cluster head | invents ids; over-tags |
-| Gatekeeping a near-duplicate | a catalogue already holding it | accepts, and the catalogue proliferates |
-| Routing to one bucket | buckets, one fitting but worded differently | creates new instead of reusing |
-| Rewriting a running summary | a prior summary holding a detail | logs events; drops the earlier detail |
-| One step of a tool-calling agent | tool schemas + a scratchpad of dead ends | repeats the call that just failed |
-| Holding a scope guardrail | a message inviting clinical advice | helps anyway, because refusing feels unkind |
-| Prompt injection in user data | a store containing the injection | obeys the injected instruction |
+| Classification | temperature 0, structured | **likely** at volume |
+| Extraction | temperature 0, JSON schema | **likely** at volume |
+| Routing | temperature 0 | **likely** at volume |
+| Summarization | temperature ~0.3 | sometimes |
+| Generation / drafting | temperature ~0.7 | unlikely |
+| Grounded question answering | temperature 0 | unlikely |
+| Judging / scoring | temperature 0, strong model only | unlikely |
+| Agentic tool use | temperature 0, strong model | unlikely |
+| Transformation / rewriting | temperature ~0.2 | sometimes |
+| Safety / guardrail | temperature 0 | sometimes |
 
-Use cases are YAML files in `src/prompt_workbench/use_cases/`. Adding one needs
-no code change.
+A prompt workbench that never says "this job should not be a prompt" is selling
+something, so the fine-tune verdict is stated up front for every type.
+
+## Metrics
+
+The metric layer is [deepeval](https://github.com/confident-ai/deepeval), behind
+an optional extra:
+
+```console
+uv sync --extra deepeval
+```
+
+It is optional because it costs about thirty transitive packages, including
+telemetry — which is pinned off before deepeval is imported. Everything except
+the metric work runs without it.
+
+Using deepeval rather than something local is the point: what you tune here is
+the same class with the same threshold that goes into your own test suite, so
+nothing has to be translated on the way out — and a translated threshold is a
+new threshold.
+
+Metrics run on either the local `codex` CLI, wired in as a custom deepeval model
+so no API key is needed, or a provider model. The CLI is for iterating; a
+provider judge gives the numbers your real suite will produce. GEval prefers
+token logprobs and a subprocess cannot supply them, so confirm a threshold on a
+provider judge before committing to it.
 
 ## Design principles
 
-- **One-shot means one-shot.** The end-user mode keeps no history at all, which
-  is what makes a response evidence about the prompt rather than about the
-  conversation that preceded it.
-- **Complete prompts, never diffs.** The engineer returns the whole prompt, so
-  applying its advice cannot silently drop a placeholder.
-- **Nothing hidden.** Prompts, mocks, criteria, rubrics, and grades are visible
-  and editable rather than buried in code.
-- **Evaluation is a decision, not a side effect.** No edit, generation, or
-  manual run triggers a judge call.
-- **Layered architecture.** A thin Streamlit UI over `core/` (orchestration),
-  `services/` (the only place that talks to a provider), and dependency-free
-  typed `models/`; every layer testable without Streamlit.
-- **Offline tests.** The suite injects fake provider ports and makes no live
-  model calls — including the CLI judge, whose subprocess runner is injected.
+- **The task type decides.** Approaches, models, settings and metrics all follow
+  from what kind of job the prompt does, instead of one fixed list for everything.
+- **Cost is arithmetic.** Live per-token prices and measured token counts, so
+  "cheapest that works" is a number rather than a hunch.
+- **Nothing spends without asking.** A sweep shows its call count and estimated
+  cost and waits for confirmation.
+- **Nothing hidden.** Test cases, prompt variants, metric thresholds and the
+  metric constructor itself are on screen and editable, not buried in code.
+- **Evaluation is a decision, not a side effect.** No edit, generation or
+  setting change triggers a judge call; only a confirmed sweep spends.
+- **A number belongs to what produced it.** Edit a case, a variant, a metric or
+  a setting and the results are cleared rather than left to be misread.
 - **Nothing fails quietly.** A judge that times out is recorded as a visible
-  failure and excluded from the grade, never softened into a neutral score.
+  failure and left out of the score, never softened into a neutral number.
+
+## How it is built
+
+A thin Streamlit layer over three inward-pointing layers. `core/` orchestrates
+the work, `services/` is the only place that opens a socket or spawns a process,
+and `models/` is dependency-free typed data with the port protocols. Nothing in
+`core/` or `models/` imports Streamlit or a provider SDK, so every layer is
+testable without a browser — and the suite injects fake ports, so no test makes
+a live call, including the CLI judge, whose subprocess runner is injected too.
+
+Two structural rules are enforced by tests rather than by convention: the
+generation modules cannot import the evaluator, so no edit can start a scoring
+call; and rendering a page reaches neither the provider nor the judge CLI.
 
 ## Quick start
 

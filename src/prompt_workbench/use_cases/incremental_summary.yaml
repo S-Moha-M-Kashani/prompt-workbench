@@ -1,4 +1,5 @@
 key: incremental_summary
+task_type: summarization
 label: Rewriting a running summary
 family: state
 origin: a tutor that keeps one running summary per stretch of conversation

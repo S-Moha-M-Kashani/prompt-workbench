@@ -1,4 +1,5 @@
 key: grounded_briefing
+task_type: grounded_qa
 label: Grounded briefing from an empty history
 family: grounding
 origin: a tutoring app that briefs its answerer from a memory graph

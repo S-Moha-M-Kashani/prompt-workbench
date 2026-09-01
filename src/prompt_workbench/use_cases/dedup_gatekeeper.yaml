@@ -1,4 +1,5 @@
 key: dedup_gatekeeper
+task_type: classification
 label: Gatekeeping a near-duplicate proposal
 family: structure
 origin: a curriculum graph where topic proliferation quietly ruins retrieval

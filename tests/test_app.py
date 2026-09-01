@@ -1,21 +1,17 @@
-"""The Streamlit surface, exercised headlessly.
+"""The screen, exercised headlessly.
 
-Every one of these renders the real app with a fake or absent credential. The
-recurring assertion is the important one: rendering a page must never reach the
-provider. Only an explicit action may.
+Every test renders the real app with no credential and no network: the model
+registry is pinned to its committed snapshot, so prices are the bundled ones and
+nothing reaches out.
 """
 
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 import prompt_workbench
-from prompt_workbench.services import (
-    codex_cli_client,
-    model_catalog,
-    openrouter_client,
-    use_case_catalog,
-)
+from prompt_workbench.services import deepeval_metrics, model_registry, openrouter_client
 from prompt_workbench.services.openrouter_client import ProviderConfig
 
 APP = Path(__file__).resolve().parents[1] / "src" / "prompt_workbench" / "app.py"
@@ -24,237 +20,394 @@ _FAKE_API_KEY = "test-fake-key"
 SETUP_NOTICE = "Add a provider API key in the sidebar"
 
 
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    """No test reaches the provider's model list; the snapshot is the catalogue.
+
+    Both the raw fetcher and the UI's cached wrapper are stubbed, and the
+    Streamlit cache is cleared so a result from another test cannot leak in.
+    """
+    from prompt_workbench.ui import session as ui_session
+
+    def fail() -> dict:
+        raise RuntimeError("tests never fetch the live model list")
+
+    monkeypatch.setattr(model_registry, "fetch_live", fail)
+    ui_session._cached_model_list.clear()
+    monkeypatch.setattr(ui_session, "_cached_model_list", fail)
+
+
 def _without_credentials(monkeypatch):
-    """Pin the app to an empty config so the tests never read a developer's
-    .env or environment — the app must behave identically on a clean clone
-    with no key available at all."""
     monkeypatch.setattr(openrouter_client, "config_from_env", lambda **_: ProviderConfig())
 
 
 def _with_credentials(monkeypatch):
     monkeypatch.setattr(
-        openrouter_client,
-        "config_from_env",
-        lambda **_: ProviderConfig(api_key=_FAKE_API_KEY),
+        openrouter_client, "config_from_env", lambda **_: ProviderConfig(api_key=_FAKE_API_KEY)
     )
 
 
 def _rendered(at) -> str:
-    """Everything textual the app put on screen."""
     return " ".join(
         element.value
-        for group in (at.title, at.caption, at.markdown, at.subheader, at.info, at.warning)
+        for group in (at.title, at.caption, at.markdown, at.subheader, at.info,
+                      at.warning, at.success)
         for element in group
         if isinstance(element.value, str)
     )
 
 
-def test_app_runs_without_exception(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    assert not at.exception
+def _run(monkeypatch, *, credentials: bool = False):
+    (_with_credentials if credentials else _without_credentials)(monkeypatch)
+    return AppTest.from_file(APP).run()
 
 
-def test_app_shows_title_and_version(monkeypatch):
-    _without_credentials(monkeypatch)
+# --- it renders -----------------------------------------------------------
 
-    at = AppTest.from_file(APP).run()
 
+def test_the_app_runs_without_exception(monkeypatch):
+    assert not _run(monkeypatch).exception
+
+
+def test_the_title_and_version_are_shown(monkeypatch):
+    at = _run(monkeypatch)
     assert at.title[0].value == "Prompt Workbench"
     assert prompt_workbench.__version__ in _rendered(at)
 
 
-def test_sidebar_offers_a_key_field_and_a_catalog_model(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    assert at.sidebar.text_input[0].label == "API key"
-    assert at.sidebar.selectbox[0].value in {m.id for m in model_catalog.all_models()}
-
-
-def test_without_a_key_the_app_explains_what_is_disabled(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-
-    assert any(SETUP_NOTICE in message.value for message in at.info)
+def test_all_five_steps_are_on_one_page(monkeypatch):
+    """Sections rather than tabs: each step only means anything once the one
+    before it exists."""
+    rendered = _rendered(_run(monkeypatch))
+    for step in ("1 · Your case", "2 · Test cases", "3 · Prompt variants",
+                 "4 · Metrics", "5 · Sweep"):
+        assert step in rendered, step
 
 
-def test_with_a_key_the_setup_notice_disappears(monkeypatch):
-    _with_credentials(monkeypatch)
+def test_later_steps_say_what_they_are_waiting_for(monkeypatch):
+    rendered = _rendered(_run(monkeypatch))
+    assert "Pick the kind of job above" in rendered
+    assert "Pick the kind of job first" in rendered
 
-    at = AppTest.from_file(APP).run()
 
-    assert not any(SETUP_NOTICE in message.value for message in at.info)
+# --- the task type drives the page ---------------------------------------
+
+
+def test_every_task_type_is_offered(monkeypatch):
+    from prompt_workbench.services import task_catalog
+
+    at = _run(monkeypatch)
+    picker = next(box for box in at.selectbox if box.label == "Kind of job")
+    assert len(picker.options) == len(task_catalog.all_task_types())
+
+
+def test_picking_a_job_type_shows_its_approaches(monkeypatch):
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("classification").run()
+    labels = {box.label for box in at.checkbox}
+    assert "Strict enumeration" in labels
+    assert "JSON schema" in labels
+
+
+def test_a_different_job_type_shows_different_approaches(monkeypatch):
+    """The fix to the earlier design, visible on screen: approaches are chosen
+    for the job, not a fixed list applied to everything."""
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("generation").run()
+    labels = {box.label for box in at.checkbox}
+    assert "Outline, then write" in labels
+    assert "Strict enumeration" not in labels
+
+
+def test_a_high_volume_job_says_a_fine_tune_may_beat_prompting(monkeypatch):
+    """A prompt workbench that never mentions this is selling something."""
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("classification").run()
+    assert "fine-tuned small model" in _rendered(at)
+
+
+def test_picking_a_job_type_adopts_its_settings(monkeypatch):
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("classification").run()
+    assert "same input should get the same label" in _rendered(at)
+
+
+# --- prices ---------------------------------------------------------------
+
+
+def test_models_are_offered_cheapest_first_with_real_prices(monkeypatch):
+    at = _run(monkeypatch)
+    authoring = next(box for box in at.sidebar.selectbox if box.label == "Authoring model")
+    registry = model_registry.ModelRegistry(fetch=lambda: (_ for _ in ()).throw(RuntimeError()))
+    cheapest = registry.cheapest_first()[0].id
+    assert authoring.options[0] == cheapest
+    assert "per 1M tokens" in " ".join(c.value for c in at.sidebar.caption)
+
+
+def test_the_snapshot_is_declared_as_possibly_stale(monkeypatch):
+    at = _run(monkeypatch)
+    assert any("snapshot" in w.value for w in at.sidebar.warning)
+
+
+# --- settings -------------------------------------------------------------
+
+
+def test_settings_are_disabled_for_a_model_that_ignores_them(monkeypatch):
+    at = _run(monkeypatch)
+    at = next(b for b in at.sidebar.selectbox if b.label == "Authoring model").set_value(
+        "openai/gpt-5-mini"
+    ).run()
+    sampling = [s for s in at.sidebar.slider if s.label in {"temperature", "top_p"}]
+    assert sampling and all(s.disabled for s in sampling)
+    cap = next(box for box in at.sidebar.number_input if box.label == "max_tokens")
+    assert not cap.disabled
+
+
+def test_settings_are_active_for_a_tunable_model(monkeypatch):
+    at = _run(monkeypatch)
+    at = next(b for b in at.sidebar.selectbox if b.label == "Authoring model").set_value(
+        "openai/gpt-4o-mini"
+    ).run()
+    assert not any(s.disabled for s in at.sidebar.slider)
+
+
+def test_the_settings_live_in_the_sidebar_not_the_page(monkeypatch):
+    at = _run(monkeypatch)
+    assert len(at.slider) == len(at.sidebar.slider)
+
+
+# --- metrics --------------------------------------------------------------
+
+
+def test_the_metric_layer_states_its_install_command_when_absent(monkeypatch):
+    monkeypatch.setattr(deepeval_metrics, "is_available", lambda: False)
+    at = _run(monkeypatch)
+    rendered = _rendered(at) + " ".join(w.value for w in at.sidebar.warning)
+    assert deepeval_metrics.INSTALL_HINT in rendered
+
+
+def test_the_rest_of_the_page_works_without_the_metric_extra(monkeypatch):
+    monkeypatch.setattr(deepeval_metrics, "is_available", lambda: False)
+    at = _run(monkeypatch)
+    assert not at.exception
+    assert "1 · Your case" in _rendered(at)
+
+
+def test_a_job_type_brings_its_suggested_metrics(monkeypatch):
+    """Grounded QA proposes faithfulness; classification does not."""
+    if not deepeval_metrics.is_available():
+        pytest.skip("needs the deepeval extra")
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("grounded_qa").run()
+    # Metric names sit in expander labels; their purpose is rendered as a caption.
+    purposes = " ".join(caption.value for caption in at.caption)
+    assert deepeval_metrics.get("faithfulness").purpose in purposes
+
+
+def test_a_different_job_type_brings_different_metrics(monkeypatch):
+    if not deepeval_metrics.is_available():
+        pytest.skip("needs the deepeval extra")
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("agentic").run()
+    purposes = " ".join(caption.value for caption in at.caption)
+    assert deepeval_metrics.get("tool_correctness").purpose in purposes
+    assert deepeval_metrics.get("faithfulness").purpose not in purposes
+
+
+# --- nothing runs on its own ---------------------------------------------
 
 
 def test_rendering_makes_no_provider_call(monkeypatch):
-    """Rendering must never reach the provider; only explicit actions may."""
-    _with_credentials(monkeypatch)
-
     def fail(*args, **kwargs):
         raise AssertionError("rendering must not build a provider client")
 
     monkeypatch.setattr(openrouter_client, "build_client", fail)
-
-    at = AppTest.from_file(APP).run()
-
-    assert not at.exception
+    assert not _run(monkeypatch, credentials=True).exception
 
 
 def test_rendering_never_spawns_the_local_judge(monkeypatch):
-    """The CLI judge costs a process spawn per call, so a page render must not
-    start one — only pressing Evaluate may."""
-    _with_credentials(monkeypatch)
+    from prompt_workbench.services import codex_cli_client
 
     def fail(*args, **kwargs):
         raise AssertionError("rendering must not run the judge CLI")
 
     monkeypatch.setattr(codex_cli_client, "complete", fail)
-
-    at = AppTest.from_file(APP).run()
-
-    assert not at.exception
+    assert not _run(monkeypatch, credentials=True).exception
 
 
-def test_a_missing_local_judge_is_reported_rather_than_assumed(monkeypatch):
-    _without_credentials(monkeypatch)
-    monkeypatch.setattr(codex_cli_client, "is_available", lambda **_: False)
-
-    at = AppTest.from_file(APP).run()
-
-    assert not at.exception
-    assert any("not installed" in caption.value for caption in at.sidebar.caption)
+def test_with_a_key_the_setup_notice_disappears(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    assert not any(SETUP_NOTICE in message.value for message in at.info)
 
 
-def test_the_use_case_dropdown_offers_every_shipped_situation(monkeypatch):
-    _without_credentials(monkeypatch)
+def test_a_worked_example_can_be_loaded_as_a_starting_point(monkeypatch):
+    """The examples show what a well-shaped case looks like. They are not the
+    thing the workbench is for, so they sit in an expander, not the front page."""
+    from prompt_workbench.services import use_case_catalog
 
-    at = AppTest.from_file(APP).run()
-
-    # AppTest reports the formatted labels, so compare against those.
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    shipped = use_case_catalog.all_use_cases()
-    assert len(picker.options) == len(shipped)
-    for case in shipped:
-        assert any(case.label in option for option in picker.options), case.key
+    at = _run(monkeypatch)
+    picker = next(box for box in at.selectbox if box.label == "Worked situations")
+    assert len(picker.options) == len(use_case_catalog.all_use_cases())
 
 
-def test_nothing_is_selected_until_the_user_picks(monkeypatch):
-    """The screen must not quietly load a situation the user did not choose."""
-    _without_credentials(monkeypatch)
+def test_every_example_names_the_kind_of_job_it_is(monkeypatch):
+    """Loading one settles the task type too, or it would drop the user back
+    into the choice it exists to demonstrate."""
+    from prompt_workbench.services import task_catalog, use_case_catalog
 
-    at = AppTest.from_file(APP).run()
-
-    assert any("Pick a use case" in message.value for message in at.info)
-
-
-def test_picking_a_use_case_writes_its_situation_into_the_chat(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    at = picker.set_value("injection_resistance").run()
-
-    rendered = _rendered(at)
-    assert "Prompt injection" in rendered
-    assert "Obeying it" in rendered, "the trap must be stated, not just the situation"
+    known = {task.key for task in task_catalog.all_task_types()}
+    for example in use_case_catalog.all_use_cases():
+        assert example.task_type in known, example.key
 
 
-def test_picking_a_use_case_loads_its_prompt_for_editing(monkeypatch):
-    _without_credentials(monkeypatch)
+def test_a_case_can_be_written_without_a_provider_key(monkeypatch):
+    """Generation needs a key; writing a case down does not. A workbench that is
+    inert until someone has paid for a key is not usable."""
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("classification").run()
 
-    at = AppTest.from_file(APP).run()
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    at = picker.set_value("grounded_briefing").run()
+    add = next(button for button in at.button if button.label == "Add this case")
+    assert not add.disabled
 
-    prompt_box = next(area for area in at.text_area if area.label == "System prompt")
-    assert "{history}" in prompt_box.value, "placeholders stay visible while editing"
-
-
-def test_the_chat_offers_both_modes(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    at = picker.set_value("grounded_briefing").run()
-
-    mode = next(radio for radio in at.radio if radio.label == "Mode")
-    assert set(mode.options) == {"Prompt engineer", "End user (one-shot)"}
+    inputs = {area.label for area in at.text_area}
+    assert "Input" in inputs
 
 
-def test_there_is_exactly_one_chat_input(monkeypatch):
-    """One window. The five-area workspace is gone."""
-    _without_credentials(monkeypatch)
+def test_an_existing_prompt_can_be_pasted_in_without_a_key(monkeypatch):
+    """The obvious thing to want: bring the prompt you already have and find out
+    whether any generated approach beats it."""
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("classification").run()
 
-    at = AppTest.from_file(APP).run()
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    at = picker.set_value("grounded_briefing").run()
-
-    assert len(at.chat_input) == 1
-
-
-def test_the_main_screen_carries_no_knobs(monkeypatch):
-    """Settings belong in the sidebar. The screen itself stays a use case, a
-    prompt and a conversation."""
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-    picker = next(box for box in at.selectbox if box.label == "Use case")
-    at = picker.set_value("grounded_briefing").run()
-
-    sidebar_sliders = {slider.label for slider in at.sidebar.slider}
-    assert {"temperature", "top_p"} <= sidebar_sliders
-    assert len(at.slider) == len(at.sidebar.slider), "no slider outside the sidebar"
+    add = next(button for button in at.button if button.label == "Add this prompt")
+    assert not add.disabled
 
 
-def test_model_settings_are_offered_for_a_model_that_honours_them(monkeypatch):
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
-    at = model_pick.set_value("openai/gpt-4o-mini").run()
-
-    labels = {slider.label for slider in at.sidebar.slider}
-    assert {"temperature", "top_p"} <= labels
-    assert not any(slider.disabled for slider in at.sidebar.slider)
+def test_the_front_page_does_not_overstate_what_works_without_a_key(monkeypatch):
+    at = _run(monkeypatch)
+    notice = " ".join(message.value for message in at.info)
+    assert "generate" in notice.lower()
+    assert "paste" in notice.lower() or "write" in notice.lower()
 
 
-def test_model_settings_stay_visible_but_disabled_for_a_reasoning_model(monkeypatch):
-    """They are shown rather than hidden so the reason is legible: this model
-    drops them, it is not that the workbench forgot to offer them."""
-    _without_credentials(monkeypatch)
-
-    at = AppTest.from_file(APP).run()
-    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
-    at = model_pick.set_value("openai/gpt-5-mini").run()
-
-    sampling = [s for s in at.sidebar.slider if s.label in {"temperature", "top_p"}]
-    assert sampling, "sampling settings must stay on screen"
-    assert all(s.disabled for s in sampling)
+# --- a loaded example lands where the user is looking ----------------------
 
 
-def test_the_output_cap_stays_active_for_a_reasoning_model(monkeypatch):
-    """max_tokens is the one knob a reasoning model does honour."""
-    _without_credentials(monkeypatch)
+def _load_first_example(monkeypatch):
+    from prompt_workbench.services import use_case_catalog
 
-    at = AppTest.from_file(APP).run()
-    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
-    at = model_pick.set_value("openai/gpt-5-mini").run()
+    example = use_case_catalog.all_use_cases()[0]
+    at = _run(monkeypatch)
+    at = next(b for b in at.selectbox if b.label == "Worked situations").set_value(
+        example.key
+    ).run()
+    at = next(button for button in at.button if button.label == "Load it").click().run()
+    return example, at
 
-    cap = next(box for box in at.sidebar.number_input if box.label == "max_tokens")
-    assert not cap.disabled
+
+def _description_box(at):
+    return next(area for area in at.text_area if area.label == "What must this prompt do?")
 
 
-def test_the_sidebar_says_why_settings_are_disabled(monkeypatch):
-    _without_credentials(monkeypatch)
+def test_loading_an_example_fills_in_the_description_box(monkeypatch):
+    """It has to land in the widget, not only in the session behind it — an
+    example that silently fills nothing in reads as a broken button."""
+    example, at = _load_first_example(monkeypatch)
+    assert example.situation[:40] in _description_box(at).value
 
-    at = AppTest.from_file(APP).run()
-    model_pick = next(box for box in at.sidebar.selectbox if box.label == "Model under test")
-    at = model_pick.set_value("openai/gpt-5-mini").run()
 
-    captions = " ".join(caption.value for caption in at.sidebar.caption)
-    assert "ignore" in captions.lower() or "drop" in captions.lower()
+def test_loading_an_example_settles_the_job_picker(monkeypatch):
+    example, at = _load_first_example(monkeypatch)
+    picker = next(box for box in at.selectbox if box.label == "Kind of job")
+    assert picker.value == example.task_type
+
+
+def test_a_loaded_example_survives_the_next_rerun(monkeypatch):
+    """The description box is read back on the following run; if the load never
+    reached it, that read wipes the description it just wrote."""
+    _, at = _load_first_example(monkeypatch)
+    assert _description_box(at.run()).value.strip()
+
+
+def test_a_described_case_settles_the_job_picker_too(monkeypatch):
+    """The proposal is only useful if the control that owns the choice shows it."""
+    at = _run(monkeypatch)
+    at = _description_box(at).set_value(
+        "Sort incoming support tickets into one of six queues."
+    ).run()
+    picker = next(box for box in at.selectbox if box.label == "Kind of job")
+    assert picker.value == "classification"
+
+
+# --- the sweep refuses out loud -------------------------------------------
+
+
+def _ready_to_sweep(monkeypatch, *, credentials: bool = False, description: str = ""):
+    at = _run(monkeypatch, credentials=credentials)
+    if description:
+        at = _description_box(at).set_value(description).run()
+    at = next(box for box in at.selectbox if box.label == "Kind of job").set_value(
+        "classification"
+    ).run()
+    at = next(area for area in at.text_area if area.label == "Input").set_value(
+        "charged twice this month"
+    ).run()
+    at = next(button for button in at.button if button.label == "Add this case").click().run()
+    at = next(area for area in at.text_area if area.label == "System prompt").set_value(
+        "You are a classifier."
+    ).run()
+    at = next(button for button in at.button if button.label == "Add this prompt").click().run()
+    return at
+
+
+def _sweep_button(at):
+    return next(button for button in at.button if button.label == "Run the sweep")
+
+
+def test_a_sweep_with_nothing_described_refuses_out_loud(monkeypatch):
+    """The run used to return silently when there was no case brief, so the
+    button looked live and did nothing."""
+    at = _ready_to_sweep(monkeypatch, credentials=True)
+    assert _sweep_button(at).disabled
+    assert "Describe the case" in _rendered(at)
+
+
+def test_a_sweep_without_a_key_says_that_is_why(monkeypatch):
+    at = _ready_to_sweep(monkeypatch, description="Sort tickets into one of six queues.")
+    button = _sweep_button(at)
+    assert button.disabled
+    assert button.help and "API key" in button.help
+
+
+def test_a_sweep_whose_metrics_are_unconfigured_points_at_the_metric_step(monkeypatch):
+    """Every task type suggests metrics that need something from the case before
+    they can score it, so this is the state a new user actually lands in."""
+    at = _ready_to_sweep(
+        monkeypatch, credentials=True, description="Sort tickets into one of six queues."
+    )
+    button = _sweep_button(at)
+    assert button.disabled
+    assert button.help and "step 4" in button.help
+
+
+def test_a_sweep_with_no_metric_left_on_refuses(monkeypatch):
+    """A sweep that measures nothing ranks nothing; it must not look runnable."""
+    at = _ready_to_sweep(
+        monkeypatch, credentials=True, description="Sort tickets into one of six queues."
+    )
+    for box in [b for b in at.checkbox if b.key and b.key.startswith("me_")]:
+        at = box.set_value(False).run()
+    button = _sweep_button(at)
+    assert button.disabled
+    assert button.help and "at least one metric" in button.help
+
+
+def test_a_sweep_is_offered_once_its_metrics_can_score_the_cases(monkeypatch):
+    at = _ready_to_sweep(
+        monkeypatch, credentials=True, description="Sort tickets into one of six queues."
+    )
+    # Exact match and JSON correctness want fields these cases do not carry;
+    # the criteria metric can score them as they are.
+    for key in ("me_exact_match", "me_json_correctness"):
+        at = next(box for box in at.checkbox if box.key == key).set_value(False).run()
+    assert not _sweep_button(at).disabled

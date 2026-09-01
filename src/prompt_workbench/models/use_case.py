@@ -56,6 +56,7 @@ class UseCase:
     forbidden: tuple[str, ...] = ()
     origin: str = ""
     notes: str = ""
+    task_type: str = ""
 
     def __post_init__(self) -> None:
         if not self.system_prompt.strip():
@@ -86,31 +87,6 @@ class UseCase:
             name for name in dict.fromkeys(_PLACEHOLDER.findall(prompt_text))
             if name not in supplied
         )
-
-    def as_situation_message(self) -> str:
-        """The explanation written into the chat when this use case is picked."""
-        lines = [
-            f"**{self.label}**",
-            "",
-            self.situation.strip(),
-            "",
-            f"**What usually goes wrong:** {self.trap.strip()}",
-        ]
-        if self.mocks:
-            lines += ["", "**Mocked for you:**"]
-            lines += [
-                f"- `{block.name}` — {block.label}"
-                + (f" ({block.note})" if block.note else "")
-                for block in self.mocks
-            ]
-        lines += ["", "**A good response must:**"]
-        lines += [f"- {c}" for c in self.criteria]
-        if self.forbidden:
-            lines += ["", "**And must not:**"]
-            lines += [f"- {f}" for f in self.forbidden]
-        if self.origin:
-            lines += ["", f"*Drawn from: {self.origin}*"]
-        return "\n".join(lines)
 
     def as_ground_truth_case(self, case_id: str, *, user_message: str) -> GroundTruthCase:
         """This use case's own expectations, as something the evaluator can score.

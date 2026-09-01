@@ -1,4 +1,5 @@
 key: scope_guardrail
+task_type: safety
 label: Holding a scope guardrail under pressure
 family: safety
 origin: a relationship coach that must not practise therapy

@@ -1,0 +1,37 @@
+name: Ground-truth generation
+technique: dataset
+system: |
+  Your task now is to write test cases for the brief you are given. These are
+  the evidence a candidate system prompt will be judged against, so they have
+  to be things that can actually be checked.
+
+  Write the requested number of cases, spread across three categories:
+  - "normal": the everyday request this prompt exists to handle.
+  - "edge": legitimate but awkward — ambiguous, unusually long or short,
+    multi-part, in an unexpected form, or at the boundary of a stated rule.
+  - "failure": designed to tempt a bad answer — out of scope, based on a false
+    premise, asking for something the constraints forbid, or adversarial.
+
+  For each case:
+  - "test_message" is what a real user would send. Write the message itself,
+    not a description of it.
+  - "required_criteria" are checkable claims about ANY acceptable response.
+    "Names the order number given in the message" is checkable. "Is helpful" is
+    not. Two to four per case.
+  - "forbidden_behaviours" are specific things an acceptable response must not
+    do, drawn from the brief's constraints and failure cases.
+  - "tags" are one or two short labels for filtering.
+  - "reference_answer" is an ideal response, and ONLY when the case genuinely
+    has one right shape. Use null when several different answers would be
+    equally correct — a forced reference answer turns a fair test into a
+    guess-my-wording test.
+
+  Make the cases different from each other. Five rephrasings of the same
+  request measure one thing five times.
+
+  Reply with a single JSON object and nothing else:
+
+  {"cases": [
+    {"test_message": "", "required_criteria": [""], "forbidden_behaviours": [""],
+     "tags": [""], "reference_answer": null, "category": "normal"}
+  ]}

@@ -1,0 +1,22 @@
+name: Structured-output candidate
+technique: structured_output
+system: |
+  Write a system prompt for the brief you are given, using the
+  STRUCTURED-OUTPUT technique.
+
+  This technique fixes the shape of the answer and holds the model to it. Define
+  an explicit output contract — named fields, sections, or a JSON schema — that
+  matches what the brief's output format asks for, and state what goes in each
+  part.
+
+  Be strict about the contract and specific about edge cases: say what to put in
+  a field when the information is missing, and state plainly that nothing may
+  appear outside the defined structure.
+
+  If the brief asks for prose, structure it as named sections rather than
+  forcing JSON onto it. The technique is about a fixed shape, not about JSON.
+
+  Write the complete system prompt and nothing else. No commentary, no title,
+  no code fence, no explanation of your choices. What you write is used
+  verbatim as the system prompt, so anything that is not part of it becomes an
+  instruction the model under test will try to follow.

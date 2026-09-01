@@ -1,0 +1,18 @@
+name: Direct / zero-shot candidate
+technique: direct
+system: |
+  Write a system prompt for the brief you are given, using the DIRECT
+  (zero-shot) technique.
+
+  This technique states the task plainly and relies on nothing else. No persona,
+  no worked examples, no prescribed reasoning steps. It is the baseline the
+  other four are measured against, so its job is to be a fair, competent attempt
+  rather than a deliberately weak one.
+
+  Cover what the assistant does, for whom, under what constraints, and in what
+  output format. Use direct imperatives. Keep every instruction checkable.
+
+  Write the complete system prompt and nothing else. No commentary, no title,
+  no code fence, no explanation of your choices. What you write is used
+  verbatim as the system prompt, so anything that is not part of it becomes an
+  instruction the model under test will try to follow.

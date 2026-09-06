@@ -1,90 +1,91 @@
 #!/bin/sh
-# pre-push — an allowlist. Only the published branch and its version tags may
-# leave this machine.
+# pre-push — two guards in one.
 #
-# Git feeds one line per ref on stdin: "<local-ref> <local-sha> <remote-ref>
-# <remote-sha>". A non-zero exit cancels the whole push before anything is
-# sent. The check is on the *local* ref, so `git push origin development:main`
-# — the same content wearing another name — is refused too.
+# 1. An allowlist. Only the published branch and its version tags may leave
+#    this machine. Git feeds one line per ref on stdin: "<local-ref>
+#    <local-sha> <remote-ref> <remote-sha>". A non-zero exit cancels the whole
+#    push before anything is sent. The check is on the *local* ref, so
+#    `git push origin development:main` — the same content wearing another
+#    name — is refused too. Deliberately an allowlist: a blocklist naming
+#    `development` would wave the next branch anyone creates straight through.
 #
-# Deliberately an allowlist: a blocklist naming `development` would wave the
-# next branch anyone creates straight through, which is the one failure this
-# shape cannot have.
+# 2. A privacy scan. Paths listed in .git/info/private-paths (one per line,
+#    # comments allowed) must never reach a remote. Pushing a branch
+#    publishes every commit behind it, so the scan reads the tree of every
+#    commit that would leave — history included — not just the tip.
 #
 # Consequence worth knowing: `git push --all` always fails while any other
 # branch exists, because one refused ref aborts the whole push. Publish by
 # naming the branch.
 
 remote_name=${1:-origin}
+zero=0000000000000000000000000000000000000000
 current=$(git symbolic-ref --quiet --short HEAD 2>/dev/null || echo "")
 
 published=main
 git show-ref --verify --quiet refs/heads/main || published=master
 
-status=0
+gitdir=$(cd "$(git rev-parse --git-common-dir)" && pwd)
+private_paths=""
+if [ -f "$gitdir/info/private-paths" ]; then
+    private_paths=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's|/*$||' \
+        -e '/^$/d' "$gitdir/info/private-paths")
+fi
 
-forbidden_path() {
-    path=$1
-    case "$path" in
-    .claude|.claude/*|.agents|.agents/*|.codex|.codex/*|.superpowers|.superpowers/*|docs|docs/*|openspec|openspec/*)
-        return 0
-        ;;
-    .env|.env/*|.mypy_cache|.mypy_cache/*|.pytest_cache|.pytest_cache/*|.venv|.venv/*|.DS_Store|*/.DS_Store|__pycache__|__pycache__/*|*/__pycache__|*/__pycache__/*|*.pyc)
-        return 0
-        ;;
-    CLAUDE.md|AGENTS.md|PLAN*.md|architecture.md)
-        return 0
-        ;;
-    esac
-    return 1
-}
-
-check_history() {
-    sha=$1
-    violations=$(git rev-list --objects "$sha" | while read -r object path; do
-        [ -n "$path" ] || continue
-        if forbidden_path "$path"; then
-            printf '%s\n' "$path"
-        fi
-    done | sort -u)
-
-    if [ -n "$violations" ]; then
-        echo "refused: the pushed history contains internal-only paths:" >&2
-        printf '%s\n' "$violations" | sed 's/^/  /' >&2
-        return 1
-    fi
-    return 0
-}
-
+refused_ref=0
+refused_private=0
 while read -r local_ref local_sha remote_ref remote_sha; do
+    allowed=0
     case "$local_ref" in
-    "refs/heads/$published"|refs/tags/v*)
-        if ! check_history "$local_sha"; then
-            status=1
-        fi
-        continue
-        ;;
-    "(delete)")
-        continue
-        ;;
+    "refs/heads/$published") allowed=1 ;;
+    refs/tags/v*)            allowed=1 ;;
+    "(delete)")              continue ;;
     HEAD)
-        if [ "$current" = "$published" ]; then
-            if ! check_history "$local_sha"; then
-                status=1
-            fi
-            continue
-        fi
+        [ "$current" = "$published" ] && allowed=1
         ;;
     esac
-    echo "refused: only $published and its v* tags are published." >&2
-    echo "  offending ref: $local_ref -> ${remote_ref:-?}" >&2
-    status=1
+    if [ "$allowed" -ne 1 ]; then
+        echo "refused: only $published and its v* tags are published." >&2
+        echo "  offending ref: $local_ref -> ${remote_ref:-?}" >&2
+        refused_ref=1
+        continue
+    fi
+
+    # ------------------------------------------------------- privacy scan
+    [ -n "$private_paths" ] || continue
+    [ "$local_sha" = "$zero" ] && continue
+    if [ "$remote_sha" = "$zero" ]; then
+        # New on the remote: everything reachable that no remote ref has.
+        revs=$(git rev-list "$local_sha" --not --remotes="$remote_name" </dev/null)
+    else
+        revs=$(git rev-list "$remote_sha..$local_sha" </dev/null)
+    fi
+    for c in $revs; do
+        # shellcheck disable=SC2086
+        hits=$(git ls-tree --name-only "$c" -- $private_paths </dev/null 2>/dev/null || true)
+        if [ -n "$hits" ]; then
+            echo "refused: a commit being pushed carries a private path." >&2
+            echo "  commit: $(git log --format='%h %s' -1 "$c" </dev/null)" >&2
+            printf '%s\n' "$hits" | sed 's/^/  path:   /' >&2
+            refused_private=1
+            break
+        fi
+    done
 done
 
-if [ "$status" -ne 0 ]; then
+if [ "$refused_ref" -ne 0 ]; then
     echo "" >&2
     echo "The remote is the record of what shipped. development, feature/* and" >&2
     echo "archive/* tags stay on this machine." >&2
     echo "Publish with: git push $remote_name $published --follow-tags" >&2
 fi
-exit "$status"
+if [ "$refused_private" -ne 0 ]; then
+    echo "" >&2
+    echo "Pushing a branch publishes every commit behind it, and that commit is" >&2
+    echo "in the history being pushed. Private paths stay on this machine; the" >&2
+    echo "list lives in .git/info/private-paths. To ever publish this branch," >&2
+    echo "purge the path from its history (see git-rules: private paths), or" >&2
+    echo "remove the entry from the list if it was never private." >&2
+fi
+[ $((refused_ref + refused_private)) -eq 0 ] || exit 1
+exit 0

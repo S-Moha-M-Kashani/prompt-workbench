@@ -1,14 +1,61 @@
 #!/bin/sh
 # guard-main — installed as both pre-commit and pre-merge-commit.
 #
-# main/master is not a branch you commit to. Every commit on it is a release
-# point, built by the release script with `git commit-tree` (which runs no
-# hooks at all). So a hook firing here means a commit is being typed onto the
-# published branch by hand, which is always the wrong move.
+# Two refusals, in order:
 #
-# The release script exports GIT_RELEASE=1 for the rare path where it needs a
-# real `git commit`.
+# 1. Private paths (.git/info/private-paths) must not enter history on ANY
+#    branch. The ladder makes every development commit an ancestor of the
+#    published branch, so a private path committed anywhere is a private path
+#    pushed later — the only commit that never leaks is the one never made.
+#    The files themselves stay on disk, visible and editable; git just does
+#    not record them. Deleting one from the index (git rm --cached) is always
+#    allowed. GIT_PRIVATE_OK=1 records one deliberately, accepting that the
+#    pre-push scan will refuse any branch whose history then carries it.
+#
+# 2. main/master is not a branch you commit to. Every commit on it is a
+#    release point, built by the release script with `git commit-tree` (which
+#    runs no hooks at all). So a hook firing here means a commit is being
+#    typed onto the published branch by hand, which is always the wrong move.
+#    The release script exports GIT_RELEASE=1 for the rare path where it
+#    needs a real `git commit`.
 
+# ------------------------------------------------------------ private paths
+if [ "${GIT_PRIVATE_OK:-}" != "1" ]; then
+    gitdir=$(cd "$(git rev-parse --git-common-dir)" && pwd) || exit 0
+    if [ -f "$gitdir/info/private-paths" ]; then
+        private_paths=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's|/*$||' \
+            -e '/^$/d' "$gitdir/info/private-paths")
+        if [ -n "$private_paths" ]; then
+            if git rev-parse --verify --quiet HEAD >/dev/null; then
+                staged=$(git diff --cached --name-only --diff-filter=d)
+            else
+                staged=$(git ls-files --cached)
+            fi
+            hits=$(
+                for f in $staged; do
+                    for p in $private_paths; do
+                        case "$f" in
+                        ("$p"|"$p"/*) echo "$f"; break ;;
+                        esac
+                    done
+                done
+            )
+            if [ -n "$hits" ]; then
+                echo "refused: the staged changes touch private paths:" >&2
+                printf '%s\n' "$hits" | sed 's/^/  /' >&2
+                echo "" >&2
+                echo "These stay on disk, visible and editable — but never in a commit," >&2
+                echo "because pushing main later publishes every commit behind it." >&2
+                echo "Unstage them (git restore --staged <path>) and commit the rest." >&2
+                echo "The list lives in .git/info/private-paths. A deliberate local-only" >&2
+                echo "commit: GIT_PRIVATE_OK=1 git commit ... (push stays refused)." >&2
+                exit 1
+            fi
+        fi
+    fi
+fi
+
+# ----------------------------------------------------- main takes releases
 branch=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || exit 0
 
 case "$branch" in

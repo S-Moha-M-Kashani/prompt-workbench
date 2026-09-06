@@ -17,6 +17,10 @@ dependencies = [
 # The metric layer. Kept optional because it costs ~31 transitive packages,
 # including telemetry, and the rest of the workbench works without it.
 deepeval = ["deepeval>=4.0,<5"]
+# Framework adapters. Each extra disables only itself when absent: the registry
+# decides availability at call time and names the install command.
+langchain = ["langchain>=1.1,<2", "langchain-openai>=1.0,<2"]
+langgraph = ["langgraph>=1.0,<2", "langchain-openai>=1.0,<2"]
 
 [project.scripts]
 prompt-workbench = "prompt_workbench.cli:main"
@@ -45,5 +49,11 @@ disallow_untyped_defs = true
 # deepeval is an optional extra and ships no stubs. Its absence is a supported
 # state, so type-checking must pass with or without it installed.
 [[tool.mypy.overrides]]
-module = ["deepeval.*"]
+module = [
+    "deepeval.*",
+    "langchain.*",
+    "langchain_core.*",
+    "langchain_openai.*",
+    "langgraph.*",
+]
 ignore_missing_imports = true

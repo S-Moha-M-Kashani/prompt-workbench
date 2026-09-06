@@ -1,4 +1,4 @@
-"""The ten kinds of job, with what each one implies.
+"""The nine kinds of job, and what each one proposes.
 
 Everything here is a claim that could be wrong for a particular case, which is
 why every one of them is overridable. They encode the ordinary shape of these
@@ -10,6 +10,11 @@ prompting outright.
 The keyword proposal is deliberately crude and deliberately abstains. A wrong
 type quietly selects the wrong metrics, and being measured against the wrong
 thing is worse than being asked one more question.
+
+There is no "agentic" kind of job. It was the odd one out only because it sent
+tools, and tools are a property of a round rather than a category of work — the
+other nine were mechanically the same call. Each entry carries a ``preset_key``
+pointing at the starting kit that fills the workspace in.
 """
 
 from prompt_workbench.models.model_settings import ModelSettings
@@ -26,6 +31,7 @@ def _v(key: str, label: str, instruction: str) -> VariantApproach:
 TASK_TYPES: tuple[TaskType, ...] = (
     TaskType(
         key="classification",
+        preset_key="classification",
         label="Classification",
         description=(
             "Assign each input to one of a fixed set of labels. The label set is "
@@ -66,6 +72,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="extraction",
+        preset_key="extraction",
         label="Extraction",
         description=(
             "Pull specific fields out of unstructured text into a fixed structure."
@@ -98,6 +105,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="routing",
+        preset_key="routing",
         label="Routing",
         description="Send each input to exactly one destination, tool or handler.",
         variants=(
@@ -126,6 +134,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="summarization",
+        preset_key="summarization",
         label="Summarization",
         description="Condense longer text while keeping what the reader needs.",
         variants=(
@@ -153,6 +162,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="generation",
+        preset_key="generation",
         label="Generation / drafting",
         description="Produce original prose to a brief: copy, replies, documents.",
         variants=(
@@ -185,6 +195,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="grounded_qa",
+        preset_key="grounded_qa",
         label="Grounded question answering",
         description=(
             "Answer using retrieved context only, and say so when the context does "
@@ -219,6 +230,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="judging",
+        preset_key="judging",
         label="Judging / scoring",
         description="Score or grade something against criteria — an LLM as evaluator.",
         variants=(
@@ -251,36 +263,8 @@ TASK_TYPES: tuple[TaskType, ...] = (
                   "quality of", "llm as a judge"),
     ),
     TaskType(
-        key="agentic",
-        label="Agentic tool use",
-        description="Decide which tool to call with which arguments, step by step.",
-        variants=(
-            _v("one_action", "One action per turn",
-               "Permit exactly one tool call or one final answer per reply, as JSON, "
-               "and forbid anything else."),
-            _v("no_repeat", "No repeated calls",
-               "State that a call already made with the same arguments must not be "
-               "repeated, and what to do instead when a result was empty."),
-            _v("budget_aware", "Budget aware",
-               "Make the remaining step count explicit and require a final answer as "
-               "the budget runs out rather than another lookup."),
-            _v("schema_strict", "Strict argument schemas",
-               "Reproduce each tool's schema and forbid argument names not in it."),
-        ),
-        metric_keys=("tool_correctness", "task_completion", "json_correctness"),
-        suggested_settings=ModelSettings(temperature=0.0, top_p=1.0),
-        settings_note="Temperature zero: a sampled tool call is a bug generator.",
-        fine_tune=FineTuneVerdict.UNLIKELY,
-        fine_tune_note=(
-            "Tool choice needs reasoning over a changing tool set, which is the "
-            "weakest area for small tuned models."
-        ),
-        needs_strong_model=True,
-        keywords=("agent", "tool", "tools", "function call", "tool call", "mcp",
-                  "step by step", "multi-step", "workflow"),
-    ),
-    TaskType(
         key="transformation",
+        preset_key="transformation",
         label="Transformation / rewriting",
         description=(
             "Convert text from one form to another: reformat, translate, simplify, "
@@ -312,6 +296,7 @@ TASK_TYPES: tuple[TaskType, ...] = (
     ),
     TaskType(
         key="safety",
+        preset_key="safety",
         label="Safety / guardrail",
         description=(
             "Hold a boundary: refuse out-of-scope requests, resist injected "

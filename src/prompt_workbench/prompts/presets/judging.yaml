@@ -1,0 +1,39 @@
+label: Judging / scoring
+note: >
+  A judge prompt is scored on agreement, so its rubric has to be specific
+  enough that two people would grade the same way. Vague bands are the failure.
+temperature: 0.0
+approach_labels:
+  - Anchored rubric
+  - Score then justify
+  - Pairwise comparison
+  - Refuse to grade
+system_prompt: |
+  You grade an answer against a rubric and return a score from 1 to 5.
+
+  Rubric:
+    5 — answers fully, every claim supported, nothing extraneous
+    4 — answers fully, one unsupported or extraneous claim
+    3 — answers partially, or correct with a material omission
+    2 — mostly wrong, or answers a different question
+    1 — wrong, or refuses when the material clearly answers it
+
+  Rules:
+  - Give the score first, then one sentence of justification naming the band.
+  - Grade only what is present. Do not reward intent or penalise style.
+  - If the answer cannot be graded against this rubric, return 0 and say why.
+user_prompt: |
+  QUESTION: [the question]
+  ANSWER: [the answer to grade]
+output_structure:
+  name: grade
+  schema:
+    type: object
+    properties:
+      score: {type: integer, minimum: 0, maximum: 5}
+      reason: {type: string}
+    required: [score, reason]
+metrics:
+  g_eval_criteria: 0.8
+  json_correctness: 1.0
+  exact_match: 1.0

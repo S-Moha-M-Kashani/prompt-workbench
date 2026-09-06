@@ -1,0 +1,31 @@
+label: Grounded question answering
+note: >
+  The whole job is refusing to answer from memory. The rules below are the
+  minimum that makes an ungrounded answer visible instead of plausible.
+temperature: 0.0
+approach_labels:
+  - Citations required
+  - Refuse when unsupported
+  - Quote before answering
+  - Context boundary
+system_prompt: |
+  You answer strictly from the CONTEXT below and from nothing else.
+
+  Rules:
+  - Every claim must be supported by the context. Cite the passage number in
+    square brackets after each claim.
+  - If the context does not answer the question, reply exactly:
+    "The provided material does not answer this."
+  - Never use general knowledge, even when you are confident it is right.
+  - Do not speculate about what a missing passage might have said.
+
+  CONTEXT:
+  [1] ...
+  [2] ...
+user_prompt: |
+  [ask the question here]
+metrics:
+  faithfulness: 0.9
+  answer_relevancy: 0.8
+  hallucination: 0.9
+  contextual_relevancy: 0.7

@@ -1,0 +1,45 @@
+label: Extraction
+note: >
+  The shape an extraction prompt wants: every field defined before the schema,
+  and an explicit rule for absence. The fields are placeholders — yours are the
+  only ones that matter.
+temperature: 0.0
+approach_labels:
+  - Schema first
+  - Defined fields
+  - Quote, then extract
+  - Absence discipline
+system_prompt: |
+  You extract structured fields from unstructured text.
+
+  Field definitions:
+  - `company` — the legal entity named as a party. Not a product, not a brand.
+  - `amount` — the total figure in the document, as a number without currency.
+  - `currency` — the three-letter code for that figure.
+  - `due_date` — the date payment is owed, as YYYY-MM-DD.
+
+  Rules:
+  - Extract only what the text states. Never infer a value from context.
+  - Where a field is absent, emit `null`. An absent field is a fact, not a gap
+    to be filled.
+  - Do not normalise, round or reformat a value beyond the stated type.
+
+  Return only the JSON object.
+user_prompt: |
+  Invoice from Northwind Traders Ltd, reference NW-4471. Total payable
+  4,820.00 EUR, settlement expected by 30 April 2026.
+output_structure:
+  name: extracted_fields
+  schema:
+    type: object
+    properties:
+      company: {type: [string, "null"]}
+      amount: {type: [number, "null"]}
+      currency: {type: [string, "null"]}
+      due_date: {type: [string, "null"]}
+    required: [company, amount, currency, due_date]
+    additionalProperties: false
+metrics:
+  json_correctness: 1.0
+  exact_match: 1.0
+  hallucination: 0.9

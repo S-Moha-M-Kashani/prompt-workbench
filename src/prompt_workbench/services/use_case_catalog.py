@@ -20,13 +20,13 @@ USE_CASES_DIR = Path(__file__).resolve().parent.parent / "use_cases"
 
 # Families in the order they appear in the dropdown. Grounding first: it is the
 # failure most prompts have and the easiest to see happening.
-FAMILY_ORDER: tuple[str, ...] = ("grounding", "structure", "state", "agentic", "safety")
+FAMILY_ORDER: tuple[str, ...] = ("grounding", "structure", "state", "tool_use", "safety")
 
 FAMILY_LABELS: dict[str, str] = {
     "grounding": "Grounding",
     "structure": "Structured output",
     "state": "Running state",
-    "agentic": "Agent loop",
+    "tool_use": "Tool use",
     "safety": "Safety",
 }
 

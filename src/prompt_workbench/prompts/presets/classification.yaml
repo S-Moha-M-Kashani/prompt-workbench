@@ -1,0 +1,45 @@
+label: Classification
+note: >
+  A starting point, not a good prompt. It has the shape a classifier wants — a
+  closed label set, a named fallback, one label out — and none of your labels.
+  Replace them, then write the variants that will actually compete.
+temperature: 0.0
+approach_labels:
+  - Strict enumeration
+  - Few-shot over the real labels
+  - JSON schema
+  - Reason, then label
+  - Decision rules in order
+system_prompt: |
+  You assign each input to exactly one label from this closed set:
+
+    billing — anything about charges, invoices, refunds or payment methods
+    access — sign-in problems, passwords, permissions
+    bug — the product behaved incorrectly
+    feature — a request for something that does not exist yet
+    other — none of the above applies
+
+  Rules:
+  - Return exactly one label from the set above. Never invent a label.
+  - If two labels could apply, choose the one the user would consider the
+    reason they wrote in.
+  - If nothing fits, return `other`. Do not guess.
+
+  Return the label alone, on one line, with no explanation.
+user_prompt: |
+  I was charged twice for the same month and the second charge is still
+  pending. Can you sort it out?
+output_structure:
+  name: label
+  schema:
+    type: object
+    properties:
+      label:
+        type: string
+        enum: [billing, access, bug, feature, other]
+    required: [label]
+    additionalProperties: false
+metrics:
+  exact_match: 1.0
+  json_correctness: 1.0
+  g_eval_criteria: 0.8

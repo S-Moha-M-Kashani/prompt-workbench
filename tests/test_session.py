@@ -226,8 +226,13 @@ def test_generating_variants_does_not_discard_your_own() -> None:
 # --- sweep results stay tied to the work that produced them ---------------
 
 
-def a_cell(variant_key: str = "v1", model_id: str = "cheap/model") -> SweepCell:
+def a_cell(
+    variant_key: str = "v1",
+    model_id: str = "cheap/model",
+    framework: str = "openai",
+) -> SweepCell:
     return SweepCell(
+        framework=framework,
         variant_key=variant_key,
         model_id=model_id,
         settings=ModelSettings(),
@@ -287,3 +292,226 @@ def test_rewriting_the_settings_with_the_same_values_keeps_the_results() -> None
     session = swept()
     session.settings = replace(session.settings)
     assert session.sweep_results
+
+
+# --- the round: settings follow the model's published list ----------------
+
+ROUND_SAMPLE = {
+    "data": [
+        {
+            "id": "rich/model",
+            "name": "Rich",
+            "context_length": 128000,
+            "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+            "supported_parameters": [
+                "temperature", "max_tokens", "seed", "tools", "response_format",
+            ],
+        },
+        {
+            "id": "plain/model",
+            "name": "Plain",
+            "context_length": 8000,
+            "pricing": {"prompt": "0.0000001", "completion": "0.0000002"},
+            "supported_parameters": ["temperature"],
+        },
+    ]
+}
+
+
+def a_round_session() -> Session:
+    session = Session(
+        new_id=sequential_ids(),
+        clock=lambda: WHEN,
+        registry=model_registry.ModelRegistry(fetch=lambda: ROUND_SAMPLE),
+    )
+    session.set_round_model("rich/model")
+    session.set_prompts(system_prompt="Be brief.", user_prompt="Say hello.")
+    return session
+
+
+def test_a_common_setting_is_enabled_only_where_the_model_publishes_it() -> None:
+    session = a_round_session()
+    assert session.registry.supports("rich/model", "top_p") is False
+    assert session.registry.supports("rich/model", "temperature") is True
+
+
+def test_an_added_parameter_is_carried_into_the_request() -> None:
+    session = a_round_session()
+    session.settings = session.registry.with_parameter(
+        "rich/model", ModelSettings(temperature=0.2), "seed", 7
+    )
+    assert session.call_request().settings.as_params() == {"temperature": 0.2, "seed": 7}
+
+
+def test_switching_to_a_model_without_a_parameter_drops_it_and_names_it() -> None:
+    session = a_round_session()
+    session.settings = session.registry.with_parameter(
+        "rich/model", ModelSettings(temperature=0.2, max_tokens=64), "seed", 7
+    )
+    session.set_round_model("plain/model")
+    assert session.settings.as_params() == {"temperature": 0.2}
+    assert sorted(session.dropped_parameters) == ["max_tokens", "seed"]
+
+
+def test_the_request_records_whether_the_shape_is_enforced() -> None:
+    from prompt_workbench.models.call import OutputStructure
+
+    shape = OutputStructure(name="verdict", schema={"type": "object"})
+    session = a_round_session()
+    session.set_output_structure(shape)
+    assert session.call_request().structure_is_enforced is True
+
+    session.set_round_model("plain/model")
+    assert session.call_request().structure_is_enforced is False
+
+
+# --- applying a starting kit ----------------------------------------------
+
+
+def test_applying_a_kit_fills_in_every_field() -> None:
+    session = a_round_session()
+    session.apply_kit(task_catalog.get("routing"))
+
+    assert session.system_prompt.strip()
+    assert session.user_prompt.strip()
+    assert session.tools, "routing's kit starts with a tool set"
+    assert session.output_structure is not None
+    assert session.settings.temperature == 0.0
+    assert {c.key for c in session.metrics} >= {"tool_correctness"}
+
+
+def test_every_field_a_kit_filled_in_stays_editable() -> None:
+    session = a_round_session()
+    session.apply_kit(task_catalog.get("routing"))
+    session.set_prompts(system_prompt="Mine.", user_prompt="Also mine.")
+    assert session.system_prompt == "Mine."
+    assert session.kit_fields_edited is True
+
+
+def test_a_freshly_applied_kit_counts_as_unedited() -> None:
+    session = a_round_session()
+    session.apply_kit(task_catalog.get("routing"))
+    assert session.kit_fields_edited is False
+
+
+def test_applying_another_kit_over_edited_work_needs_saying_so() -> None:
+    session = a_round_session()
+    session.apply_kit(task_catalog.get("routing"))
+    session.set_prompts(system_prompt="Mine.", user_prompt="Also mine.")
+
+    with pytest.raises(session.EditsWouldBeLost):
+        session.apply_kit(task_catalog.get("classification"))
+    assert session.system_prompt == "Mine.", "nothing was overwritten"
+
+    session.apply_kit(task_catalog.get("classification"), overwrite=True)
+    assert session.system_prompt != "Mine."
+
+
+def test_applying_a_kit_over_untouched_fields_needs_no_confirmation() -> None:
+    session = a_round_session()
+    session.apply_kit(task_catalog.get("routing"))
+    session.apply_kit(task_catalog.get("classification"))
+    assert "closed set" in session.system_prompt
+
+
+def test_a_tool_round_against_a_model_without_tool_support_is_refused() -> None:
+    """Named before the call, not discovered by paying for it."""
+    from prompt_workbench.models.call import ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    session.set_round_model("plain/model")
+
+    with pytest.raises(Session.ToolsUnsupported, match="plain/model"):
+        session.call_request()
+    assert any("tool-use parameter" in reason for reason in session.round_blockers)
+
+
+def test_the_same_tool_round_is_allowed_on_a_model_that_publishes_tools() -> None:
+    from prompt_workbench.models.call import ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    assert session.call_request().sends_tools is True
+
+
+def test_a_round_missing_a_prompt_says_which_one() -> None:
+    session = a_round_session()
+    session.set_prompts(system_prompt="Be brief.", user_prompt="")
+    assert session.round_is_runnable is False
+    assert any("user prompt" in reason for reason in session.round_blockers)
+
+
+def test_the_round_moving_discards_the_results_it_produced() -> None:
+    """A score is a statement about one exact configuration. Change the tool
+    set, the answer shape, the frameworks or the kind of job and the number on
+    screen describes something that no longer exists."""
+    from prompt_workbench.models.call import OutputStructure, ToolSpec
+
+    def swept_round() -> Session:
+        session = a_round_session()
+        session.sweep_results = (a_cell(),)
+        return session
+
+    changes = {
+        "a tool definition": lambda s: s.set_tools(
+            (ToolSpec(name="lookup", description="Look up."),)
+        ),
+        "the output structure": lambda s: s.set_output_structure(
+            OutputStructure(name="v", schema={"type": "object"})
+        ),
+        "a framework selection": lambda s: s.set_framework_keys(("openai", "langchain")),
+        "the prompts": lambda s: s.set_prompts(system_prompt="New.", user_prompt="New."),
+        "the model under test": lambda s: s.set_round_model("plain/model"),
+    }
+    for label, change in changes.items():
+        session = swept_round()
+        change(session)
+        assert session.sweep_results == (), label
+
+
+def test_rewriting_the_round_with_the_same_values_keeps_the_results() -> None:
+    """The page reassigns these on every rerun; results must not vanish as they
+    are drawn."""
+    session = a_round_session()
+    session.sweep_results = (a_cell(),)
+    session.set_prompts(system_prompt="Be brief.", user_prompt="Say hello.")
+    session.set_tools(())
+    session.set_framework_keys(("openai",))
+    session.set_round_model("rich/model")
+    assert session.sweep_results != ()
+
+
+def test_changing_the_kind_of_job_discards_the_results() -> None:
+    session = a_round_session()
+    session.set_task_type(task_catalog.get("classification"))
+    session.sweep_results = (a_cell(),)
+    session.set_task_type(task_catalog.get("routing"))
+    assert session.sweep_results == ()
+
+
+def test_a_sweep_cell_keeps_the_rounds_tools_and_shape_with_its_own_prompts() -> None:
+    from prompt_workbench.models.call import OutputStructure, ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    session.set_output_structure(OutputStructure(name="v", schema={"type": "object"}))
+
+    request = session.request_for(
+        system_prompt="A variant's prompt.", user_prompt="A case.", model_id="rich/model"
+    )
+    assert request.system_prompt == "A variant's prompt."
+    assert request.tool_names == ("lookup",)
+    assert request.structure_is_enforced is True
+
+
+def test_enforcement_follows_the_cells_own_model_not_the_labs() -> None:
+    """A sweep varies the model, so the flag has to be recomputed per cell."""
+    from prompt_workbench.models.call import OutputStructure
+
+    session = a_round_session()
+    session.set_output_structure(OutputStructure(name="v", schema={"type": "object"}))
+    request = session.request_for(
+        system_prompt="p", user_prompt="u", model_id="plain/model"
+    )
+    assert request.structure_is_enforced is False

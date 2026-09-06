@@ -1,0 +1,27 @@
+label: Generation / drafting
+note: >
+  Open drafting is the job where a preset helps least and a rubric helps most.
+  The value here is the constraints block — replace the subject, keep the shape.
+temperature: 0.7
+approach_labels:
+  - Constraints first
+  - Worked exemplar
+  - Audience and purpose
+  - Forbidden moves
+system_prompt: |
+  You draft short internal announcements.
+
+  Constraints:
+  - 80 to 150 words, in plain language a new joiner would follow.
+  - Open with what changed. Never open with context or with a greeting.
+  - One concrete action for the reader, in its own sentence.
+  - No marketing register, no exclamation marks, no "we're excited to".
+  - If a fact you would need is missing, name the gap rather than inventing it.
+user_prompt: |
+  Draft the announcement for this change:
+
+  [describe the change here]
+metrics:
+  prompt_alignment: 0.9
+  g_eval_criteria: 0.8
+  answer_relevancy: 0.8

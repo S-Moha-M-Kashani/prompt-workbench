@@ -303,3 +303,92 @@ def test_every_shipped_metric_can_actually_be_built_once_configured() -> None:
         judge = _fake_judge() if deepeval_metrics.get(key).uses_judge else None
         metric = deepeval_metrics.build(choice, judge=judge)
         assert metric is not None, key
+
+
+# --- the tool trace is scoreable evidence ---------------------------------
+
+
+def _case_expecting(*tools: str):
+    from prompt_workbench.models.case import EvalCase
+
+    return EvalCase(
+        id="c1",
+        input="Who is customer 7?",
+        expected_tools=tuple(tools),
+    )
+
+
+def _trace(*names: str):
+    from prompt_workbench.models.call import ToolInvocation
+
+    return tuple(
+        ToolInvocation(name=name, arguments={}, order=index)
+        for index, name in enumerate(names)
+    )
+
+
+def test_a_case_can_name_the_tools_it_expects() -> None:
+    case = _case_expecting("lookup")
+    assert case.expected_tools == ("lookup",)
+    assert {"expected_tools"} <= case.supplied_fields()
+
+
+def test_a_round_with_a_trace_supplies_the_field_the_metric_needs() -> None:
+    from prompt_workbench.core import scoring
+
+    available = scoring.available_fields(_case_expecting("lookup"), _trace("lookup"))
+    assert {"tools_called", "expected_tools"} <= available
+
+
+def test_a_round_that_called_nothing_still_supplies_the_field() -> None:
+    """An empty trace is evidence, not a missing input — otherwise the metric
+    would be skipped exactly when it has something to say."""
+    from prompt_workbench.core import scoring
+
+    available = scoring.available_fields(_case_expecting("lookup"), ())
+    assert "tools_called" in available
+
+
+def test_the_test_case_carries_the_recorded_trace_not_the_answer_text() -> None:
+    pytest.importorskip("deepeval")
+    from prompt_workbench.core import scoring
+
+    built = scoring.as_llm_test_case(
+        _case_expecting("lookup"),
+        "I looked up customer 7.",
+        tool_calls=_trace("notify"),
+    )
+    called = [tool.name for tool in (built.tools_called or [])]
+    assert called == ["notify"], "the trace, never the assistant's prose"
+    assert [tool.name for tool in (built.expected_tools or [])] == ["lookup"]
+
+
+def test_an_expected_tool_that_was_not_called_fails_visibly() -> None:
+    pytest.importorskip("deepeval")
+    from prompt_workbench.core import scoring
+
+    outcome = scoring.score_one(
+        case=_case_expecting("lookup"),
+        response="Ada Lovelace.",
+        choice=deepeval_metrics.suggested_for(("tool_correctness",))[0],
+        judge=_fake_judge(),
+        tool_calls=(),
+    )
+    assert outcome.failed is False, "a missed tool is a score of 0, not an error"
+    assert outcome.score == 0.0
+    assert outcome.passed is False
+
+
+def test_a_matched_trace_scores_full_marks() -> None:
+    pytest.importorskip("deepeval")
+    from prompt_workbench.core import scoring
+
+    outcome = scoring.score_one(
+        case=_case_expecting("lookup"),
+        response="Ada Lovelace.",
+        choice=deepeval_metrics.suggested_for(("tool_correctness",))[0],
+        judge=_fake_judge(),
+        tool_calls=_trace("lookup"),
+    )
+    assert outcome.score == 1.0
+    assert outcome.passed is True

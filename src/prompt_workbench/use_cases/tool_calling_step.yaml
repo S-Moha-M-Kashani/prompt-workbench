@@ -1,7 +1,7 @@
 key: tool_calling_step
-task_type: agentic
+task_type: routing
 label: One step of a tool-calling agent
-family: agentic
+family: tool_use
 origin: an agent that works a knowledge graph one lookup at a time
 situation: |
   Your prompt drives an agent that can only see what it has looked up. Each

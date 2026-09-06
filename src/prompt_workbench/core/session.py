@@ -19,9 +19,13 @@ than left to be read as if it still applied.
 """
 
 from collections.abc import Callable, Sequence
+from dataclasses import replace
 from datetime import UTC, datetime
 
+from prompt_workbench.core import output_structure as shapes
+from prompt_workbench.core import presets
 from prompt_workbench.core.sweep import SweepCell
+from prompt_workbench.models.call import CallRequest, CallResult, OutputStructure, ToolSpec
 from prompt_workbench.models.case import CaseBrief, EvalCase
 from prompt_workbench.models.identifiers import IdFactory, random_id
 from prompt_workbench.models.model_settings import ModelSettings
@@ -38,6 +42,10 @@ STAGES: tuple[str, ...] = ("describe", "cases", "variants", "metrics", "sweep")
 # variant has to beat to be worth adopting.
 HAND_WRITTEN_KEY = "your_own"
 HAND_WRITTEN_LABEL = "Your own prompt"
+
+# The framework a round uses until the user picks another: the provider's API
+# called directly, which is the behaviour that existed before this layer.
+DEFAULT_FRAMEWORK = "openai"
 
 
 def _now() -> datetime:
@@ -67,6 +75,20 @@ class Session:
         self.sweep_models: tuple[str, ...] = ()
         self._settings: ModelSettings = ModelSettings()
         self.sweep_results: tuple[SweepCell, ...] = ()
+
+        # --- the round under test -----------------------------------------
+        # The unit this workbench measures. Held here rather than in Streamlit
+        # state so every rule about what invalidates a result is a plain test.
+        self.framework_keys: tuple[str, ...] = (DEFAULT_FRAMEWORK,)
+        self.round_model_id: str = ""
+        self.system_prompt: str = ""
+        self.user_prompt: str = ""
+        self.tools: tuple[ToolSpec, ...] = ()
+        self.output_structure: OutputStructure | None = None
+        self.last_result: CallResult | None = None
+        self.dropped_parameters: tuple[str, ...] = ()
+        # What the last applied kit put on screen, so an edit to it is visible.
+        self._kit_baseline: tuple[str, str, tuple[ToolSpec, ...], OutputStructure | None] | None = None
 
     @property
     def new_id(self) -> IdFactory:
@@ -260,6 +282,205 @@ class Session:
     def judged_metric_count(self) -> int:
         """How many enabled metrics will actually call a judge — the cost driver."""
         return sum(1 for choice in self.enabled_metrics if choice.spec.uses_judge)
+
+    # --- the round under test ---------------------------------------------
+
+    def set_framework_keys(self, keys: Sequence[str]) -> None:
+        """Choose which frameworks the round runs through.
+
+        A result names the framework that produced it, so changing the set
+        changes what the results are about — and they go.
+        """
+        chosen = tuple(dict.fromkeys(keys))
+        if chosen == self.framework_keys:
+            return
+        self.framework_keys = chosen
+        self._discard_results()
+
+    def set_round_model(self, model_id: str) -> None:
+        """Select the model under test, dropping parameters it does not publish."""
+        if model_id == self.round_model_id:
+            return
+        self.round_model_id = model_id
+        kept, dropped = self.registry.strip_unsupported(model_id, self._settings)
+        self._settings = kept
+        self.dropped_parameters = dropped
+        self._discard_results()
+
+    def set_prompts(self, *, system_prompt: str, user_prompt: str) -> None:
+        if (system_prompt, user_prompt) == (self.system_prompt, self.user_prompt):
+            return
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
+        self._discard_results()
+
+    def set_tools(self, tools: Sequence[ToolSpec]) -> None:
+        chosen = tuple(tools)
+        if chosen == self.tools:
+            return
+        self.tools = chosen
+        self._discard_results()
+
+    def set_output_structure(self, structure: OutputStructure | None) -> None:
+        if structure == self.output_structure:
+            return
+        self.output_structure = structure
+        self._discard_results()
+
+    @property
+    def structure_is_enforced(self) -> bool:
+        """Whether the selected model would hold itself to the shape."""
+        return self.output_structure is not None and self.registry.can_enforce_structure(
+            self.round_model_id
+        )
+
+    @property
+    def structure_note(self) -> str:
+        """The sentence saying which of the two is in force."""
+        return shapes.enforcement_note(self.structure_is_enforced)
+
+    class ToolsUnsupported(RuntimeError):
+        """The selected model does not publish a tool surface."""
+
+    @property
+    def round_blockers(self) -> tuple[str, ...]:
+        """Why this round cannot be run, in the words the interface will use.
+
+        Returned as reasons rather than a bare boolean so the run control can
+        say what is missing. A disabled button with no explanation is the same
+        dead end as a silent failure.
+        """
+        reasons: list[str] = []
+        if not self.system_prompt.strip():
+            reasons.append("The round needs a system prompt.")
+        if not self.user_prompt.strip():
+            reasons.append("The round needs a user prompt.")
+        if not self.round_model_id:
+            reasons.append("No model is selected for the round.")
+        elif self.tools and not self.registry.supports_tools(self.round_model_id):
+            reasons.append(
+                f"{self.round_model_id} publishes no tool-use parameter, so a "
+                "tool-calling round against it would not be a tool-calling "
+                "measurement. Switch the tools off or pick another model."
+            )
+        if not self.framework_keys:
+            reasons.append("No framework is selected.")
+        return tuple(reasons)
+
+    @property
+    def round_is_runnable(self) -> bool:
+        return not self.round_blockers
+
+    def request_for(
+        self, *, system_prompt: str, user_prompt: str, model_id: str
+    ) -> CallRequest:
+        """A request carrying the round's tools, shape and settings, other prompts.
+
+        The sweep needs exactly this: each cell substitutes a variant's prompt
+        and a case's input while keeping everything else the round declared —
+        including the enforcement flag, which depends on the cell's own model
+        rather than the one the lab has selected.
+        """
+        return CallRequest(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model_id=model_id,
+            settings=self._settings,
+            tools=self.tools,
+            output_structure=self.output_structure,
+            structure_is_enforced=(
+                self.output_structure is not None
+                and self.registry.can_enforce_structure(model_id)
+            ),
+        )
+
+    def call_request(self) -> CallRequest:
+        """The round as one value, with the enforcement flag honestly set.
+
+        Refuses before any call is made — a round that could not be honestly
+        measured must cost nothing to find that out.
+        """
+        if self.tools and self.round_model_id and not self.registry.supports_tools(
+            self.round_model_id
+        ):
+            raise self.ToolsUnsupported(
+                f"{self.round_model_id} publishes no tool-use parameter; "
+                "this round would not measure tool calling."
+            )
+        if not self.round_is_runnable:
+            raise ValueError("; ".join(self.round_blockers))
+        return CallRequest(
+            system_prompt=self.system_prompt,
+            user_prompt=self.user_prompt,
+            model_id=self.round_model_id,
+            settings=self._settings,
+            tools=self.tools,
+            output_structure=self.output_structure,
+            structure_is_enforced=self.structure_is_enforced,
+        )
+
+    # --- starting kits -----------------------------------------------------
+
+    class EditsWouldBeLost(RuntimeError):
+        """Applying a kit would discard work the user did themselves."""
+
+    @property
+    def kit_fields_edited(self) -> bool:
+        """Whether anything a kit filled in has since been changed by hand.
+
+        Compared against what the kit actually wrote rather than against a
+        "dirty" flag, so re-typing the same text does not count as an edit and
+        an undo genuinely undoes.
+        """
+        if self._kit_baseline is None:
+            return False
+        return self._kit_baseline != (
+            self.system_prompt,
+            self.user_prompt,
+            self.tools,
+            self.output_structure,
+        )
+
+    def apply_kit(self, task: TaskType, *, overwrite: bool = False) -> presets.StartingKit:
+        """Fill the round in from ``task``'s starting kit.
+
+        Every field it writes stays editable — the kit knows the shape of the
+        job and nothing about the user's case. It writes the prompts, the tools,
+        the answer shape, the metrics and the temperature, and it decides
+        nothing about how the call is made: the framework, whether tools are
+        sent and whether a shape is asked for stay the user's choices.
+
+        Raises ``EditsWouldBeLost`` rather than overwriting hand-edited fields,
+        because only the caller has a screen to ask on.
+        """
+        if self.kit_fields_edited and not overwrite:
+            raise self.EditsWouldBeLost(
+                "Applying this starting kit would overwrite prompts, tools or the "
+                "answer shape you edited. Apply it with overwrite=True to replace them."
+            )
+        kit = presets.load(task.preset_key)
+        self.system_prompt = kit.system_prompt
+        self.user_prompt = kit.user_prompt
+        self.tools = kit.tools
+        self.output_structure = kit.output_structure
+        if kit.metrics:
+            self.metrics = deepeval_metrics.suggested_for(tuple(kit.metrics))
+            self.metrics = tuple(
+                replace(choice, threshold=kit.metrics[choice.key])
+                if choice.key in kit.metrics
+                else choice
+                for choice in self.metrics
+            )
+        if kit.temperature is not None:
+            self._settings = replace(self._settings, temperature=kit.temperature)
+        self._kit_baseline = (
+            self.system_prompt,
+            self.user_prompt,
+            self.tools,
+            self.output_structure,
+        )
+        self._discard_results()
+        return kit
 
     # --- where we are -----------------------------------------------------
 

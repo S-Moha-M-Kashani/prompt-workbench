@@ -64,9 +64,36 @@ def render() -> None:
         )
     )
 
+    _render_second_provider()
     _render_settings(workbench, registry, model_id)
     st.divider()
     _render_judge()
+
+
+def _render_second_provider() -> None:
+    """Anthropic's own key, because Anthropic is not the workbench's provider.
+
+    Kept as a separate field rather than folded into the one above: two keys for
+    two providers is the honest shape, and one field standing for both would
+    invite sending a key to the wrong endpoint.
+    """
+    from prompt_workbench.llm_call import registry as frameworks
+    from prompt_workbench.services import anthropic_catalog
+
+    entry = frameworks.get("anthropic")
+    if not entry.is_available():
+        return
+    with st.expander("Second provider (Anthropic)"):
+        st.caption(anthropic_catalog.CATALOGUE_NOTE)
+        session.set_anthropic_key(
+            st.text_input(
+                "Anthropic API key",
+                value=session.anthropic_key(),
+                type="password",
+                help="Only used by the Anthropic framework. Kept in this browser "
+                "session only, and never read from the environment.",
+            )
+        )
 
 
 def _render_settings(

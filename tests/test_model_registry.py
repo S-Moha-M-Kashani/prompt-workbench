@@ -178,3 +178,59 @@ def test_the_shortlist_is_ordered_cheapest_first() -> None:
     registry = a_registry(fails=True)
     prices = [entry.blended_price() for entry in registry.recommended()]
     assert prices == sorted(prices)
+
+
+# --- the whole catalogue, searchable --------------------------------------
+
+
+def test_search_finds_a_model_by_identifier() -> None:
+    found = [entry.id for entry in a_registry().search("gpt-5")]
+    assert found == ["openai/gpt-5-mini"]
+
+
+def test_search_finds_a_model_by_display_name() -> None:
+    found = [entry.id for entry in a_registry().search("expensive")]
+    assert found == ["expensive/model"]
+
+
+def test_search_is_case_insensitive_and_empty_means_everything() -> None:
+    registry = a_registry()
+    assert [e.id for e in registry.search("GPT-4O")] == ["openai/gpt-4o-mini"]
+    assert len(registry.search("")) == len(registry.all_models())
+
+
+def test_the_catalogue_puts_curated_entries_first() -> None:
+    registry = a_registry()
+    listed = registry.selectable()
+    curated = set(registry.curated_ids())
+    first_uncurated = next(
+        (i for i, e in enumerate(listed) if e.id not in curated), len(listed)
+    )
+    assert all(e.id in curated for e in listed[:first_uncurated])
+    assert {e.id for e in listed} == {e.id for e in registry.all_models()}
+
+
+def test_a_stale_catalogue_says_so(monkeypatch, tmp_path) -> None:
+    def fail() -> dict:
+        raise RuntimeError("no network in tests")
+
+    stale = model_registry.ModelRegistry(fetch=fail)
+    stale.all_models()
+    assert stale.is_stale is True
+
+
+def test_published_parameters_are_the_models_own() -> None:
+    registry = a_registry()
+    assert registry.published_parameters("openai/gpt-5-mini") == (
+        "max_tokens",
+        "reasoning_effort",
+        "response_format",
+    )
+    assert registry.published_parameters("no/such-model") == ()
+
+
+def test_tool_and_structure_support_come_from_the_published_list() -> None:
+    registry = a_registry()
+    assert registry.can_enforce_structure("openai/gpt-4o-mini") is True
+    assert registry.can_enforce_structure("expensive/model") is False
+    assert registry.supports_tools("openai/gpt-4o-mini") is False

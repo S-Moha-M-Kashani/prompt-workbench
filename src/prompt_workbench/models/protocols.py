@@ -8,6 +8,7 @@ a concrete provider SDK.
 
 from typing import Any, Protocol
 
+from prompt_workbench.models.call import CallRequest, CallResult
 from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.usage import TokenUsage
 
@@ -40,3 +41,16 @@ class CompletionWithUsageFn(Protocol):
         model: str | None = None,
         settings: ModelSettings | None = None,
     ) -> tuple[str, TokenUsage]: ...
+
+
+class CallRunner(Protocol):
+    """A framework that can run one round and report what it cost.
+
+    ``core`` depends on this and never on a framework SDK: the adapters live in
+    ``llm_call/``, which is the only ring allowed to import one. ``describe()``
+    returns the framework's key, so a result can name what produced it.
+    """
+
+    def run(self, request: CallRequest) -> CallResult: ...
+
+    def describe(self) -> str: ...

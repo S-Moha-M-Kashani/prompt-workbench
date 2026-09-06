@@ -15,8 +15,14 @@ from typing import Any
 import streamlit as st
 
 from prompt_workbench.core.session import Session
+from prompt_workbench.llm_call import registry as frameworks
 from prompt_workbench.models.model_settings import ModelSettings
-from prompt_workbench.models.protocols import CompletionFn, CompletionWithUsageFn, Message
+from prompt_workbench.models.protocols import (
+    CallRunner,
+    CompletionFn,
+    CompletionWithUsageFn,
+    Message,
+)
 from prompt_workbench.models.usage import TokenUsage
 from prompt_workbench.services import deepeval_judge, model_registry, openrouter_client
 from prompt_workbench.services.openrouter_client import ProviderConfig
@@ -143,3 +149,27 @@ def judge() -> Any:
     return deepeval_judge.build(
         judge_backend(), model=judge_model(), config=provider_config()
     )
+
+
+def anthropic_key() -> str:
+    """A second provider means a second session-scoped key, never an ambient one."""
+    return str(_state().get("anthropic_api_key", ""))
+
+
+def set_anthropic_key(key: str) -> None:
+    _state().anthropic_api_key = key
+
+
+def call_runner(framework_key: str) -> CallRunner:
+    """A framework adapter bound to this session's credentials.
+
+    Every adapter takes ``api_key`` and ``base_url`` the same way, so this needs
+    no per-framework branch for the workbench's own provider. A framework that
+    reaches a *different* provider gets that provider's own key — passed
+    explicitly here, as everywhere else. Tests replace this with a fake.
+    """
+    entry = frameworks.get(framework_key)
+    if entry.reaches_own_provider:
+        return entry.build(api_key=anthropic_key())
+    config = provider_config()
+    return entry.build(api_key=config.api_key, base_url=config.base_url)

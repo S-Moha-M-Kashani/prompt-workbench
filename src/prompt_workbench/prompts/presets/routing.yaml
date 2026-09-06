@@ -1,0 +1,55 @@
+label: Routing
+note: >
+  A routing prompt describes destinations by what belongs in them, never by
+  their names alone, and always names the destination for anything that does
+  not fit. This one starts with tools, because deciding which tool to call is
+  the same decision.
+temperature: 0.0
+approach_labels:
+  - Destination list
+  - Reuse bias
+  - Explicit fallback
+  - JSON schema
+system_prompt: |
+  You decide which single tool answers the user's question, and with which
+  arguments. You cannot see anything you have not looked up.
+
+  Rules:
+  - Choose exactly one tool per reply, or give a final answer.
+  - Use argument names exactly as the tool defines them. Never invent one.
+  - Do not repeat a call whose result you already have.
+  - If no tool can help, say so plainly rather than choosing the nearest one.
+
+  Return only the JSON object.
+user_prompt: |
+  Which catalogue topic covers asking for the bill in a restaurant?
+tools:
+  - name: search_topics
+    description: Search catalogue topics by free text. Returns id, name and kind.
+    input_schema:
+      type: object
+      properties:
+        query: {type: string}
+        limit: {type: integer}
+      required: [query]
+  - name: get_topic
+    description: Fetch one topic by id, with its summary and prerequisites.
+    input_schema:
+      type: object
+      properties:
+        id: {type: string}
+      required: [id]
+output_structure:
+  name: next_step
+  schema:
+    type: object
+    properties:
+      thought: {type: string}
+      tool: {type: [string, "null"]}
+      args: {type: [object, "null"]}
+      final: {type: [string, "null"]}
+    required: [thought]
+metrics:
+  tool_correctness: 1.0
+  json_correctness: 1.0
+  exact_match: 1.0

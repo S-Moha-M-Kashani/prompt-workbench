@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from prompt_workbench.models.call import ToolInvocation
 from prompt_workbench.models.case import CaseBrief, EvalCase
 from prompt_workbench.services.deepeval_metrics import MetricChoice, build, require
 
@@ -80,10 +81,40 @@ def preflight(
     return tuple(problems)
 
 
-def as_llm_test_case(case: EvalCase, response: str) -> Any:
-    """Our case plus a response, as the object deepeval scores."""
+def available_fields(
+    case: EvalCase, tool_calls: tuple[ToolInvocation, ...] | None
+) -> set[str]:
+    """Which metric inputs exist for this case *on this round*.
+
+    A function rather than a method on ``EvalCase``, because whether
+    ``tools_called`` exists is a fact about the run and not about the case —
+    and making the case know about a ``CallResult`` would couple ground truth
+    to measurement in the one direction that must not exist.
+
+    An empty trace still counts as supplied: a round that called nothing is
+    evidence, and treating it as a missing input would skip the metric exactly
+    when it has something to say.
+    """
+    fields = case.supplied_fields()
+    if tool_calls is not None:
+        fields.add("tools_called")
+    return fields
+
+
+def as_llm_test_case(
+    case: EvalCase,
+    response: str,
+    *,
+    tool_calls: tuple[ToolInvocation, ...] | None = None,
+) -> Any:
+    """Our case plus a response, as the object deepeval scores.
+
+    The tool trace comes from what the adapter recorded, never inferred from
+    the assistant's prose — "I looked up customer 7" is a claim, and scoring a
+    claim as evidence is how a tool-calling measurement stops being one.
+    """
     require()
-    from deepeval.test_case import LLMTestCase
+    from deepeval.test_case import LLMTestCase, ToolCall
 
     return LLMTestCase(
         input=case.input,
@@ -91,11 +122,26 @@ def as_llm_test_case(case: EvalCase, response: str) -> Any:
         expected_output=case.expected_output,
         context=list(case.context) or None,
         retrieval_context=list(case.retrieval_context) or None,
+        tools_called=(
+            [ToolCall(name=call.name, input_parameters=dict(call.arguments)) for call in tool_calls]
+            if tool_calls is not None
+            else None
+        ),
+        expected_tools=(
+            [ToolCall(name=name, input_parameters={}) for name in case.expected_tools]
+            if case.expected_tools
+            else None
+        ),
     )
 
 
 def score_one(
-    *, case: EvalCase, response: str, choice: MetricChoice, judge: Any
+    *,
+    case: EvalCase,
+    response: str,
+    choice: MetricChoice,
+    judge: Any,
+    tool_calls: tuple[ToolInvocation, ...] | None = None,
 ) -> MetricOutcome:
     """Score one response against one metric, turning every failure into a value.
 
@@ -106,7 +152,7 @@ def score_one(
     label = choice.spec.label
     try:
         metric = build(choice, judge=judge if choice.spec.uses_judge else None)
-        metric.measure(as_llm_test_case(case, response))
+        metric.measure(as_llm_test_case(case, response, tool_calls=tool_calls))
         score = metric.score
         reason = getattr(metric, "reason", "") or ""
     except Exception as error:  # noqa: BLE001 - one metric, one failure

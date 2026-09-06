@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 from dotenv import dotenv_values
@@ -102,7 +102,7 @@ def _create_params(
 
     params: dict[str, Any] = {"model": model, "messages": messages}
     if settings is not None:
-        params.update({k: v for k, v in asdict(settings).items() if v is not None})
+        params.update(settings.as_params())
     return params
 
 

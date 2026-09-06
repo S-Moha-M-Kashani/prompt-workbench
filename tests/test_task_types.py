@@ -6,8 +6,10 @@ from prompt_workbench.models.task_type import FineTuneVerdict, TaskType
 from prompt_workbench.services import task_catalog
 
 
-def test_the_catalogue_ships_at_least_ten_types() -> None:
-    assert len(task_catalog.all_task_types()) >= 10
+def test_the_catalogue_ships_at_least_nine_types() -> None:
+    """Nine, not ten: a tool call is a property of a round, so it stopped being
+    a kind of job. The docstring of `task_catalog` says why."""
+    assert len(task_catalog.all_task_types()) >= 9
 
 
 def test_every_type_is_fully_specified() -> None:
@@ -109,3 +111,33 @@ def test_a_task_type_is_immutable() -> None:
 def test_an_unknown_key_raises() -> None:
     with pytest.raises(KeyError):
         task_catalog.get("no_such_task")
+
+
+# --- nine kinds of job, each carrying a starting kit ----------------------
+
+
+def test_a_tool_call_is_a_property_of_a_round_not_a_kind_of_job() -> None:
+    """`agentic` was the odd one out only because it sent tools, and tools are
+    now a per-round switch. Nine of the ten were mechanically the same call."""
+    keys = {task.key for task in task_catalog.all_task_types()}
+    assert "agentic" not in keys
+    assert len(keys) == 9
+
+
+def test_nothing_still_points_at_the_removed_kind_of_job() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1] / "src" / "prompt_workbench"
+    offenders = [
+        path.relative_to(root)
+        for path in root.rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".yaml", ".json"}
+        and "task_type: agentic" in path.read_text()
+    ]
+    assert offenders == []
+
+
+def test_every_kind_of_job_names_the_preset_that_fills_it_in() -> None:
+    for task in task_catalog.all_task_types():
+        assert task.preset_key, f"{task.key} carries no preset"

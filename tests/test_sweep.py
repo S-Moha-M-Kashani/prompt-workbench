@@ -25,6 +25,7 @@ def a_registry() -> model_registry.ModelRegistry:
 
 def test_a_plan_counts_every_combination_before_anything_runs() -> None:
     plan = sweep.plan(
+        framework_keys=("openai",),
         variant_keys=("a", "b", "c"),
         model_ids=("cheap/model", "dear/model"),
         case_count=8,
@@ -37,6 +38,7 @@ def test_a_plan_counts_every_combination_before_anything_runs() -> None:
 
 def test_a_plan_estimates_cost_from_real_prices() -> None:
     plan = sweep.plan(
+        framework_keys=("openai",),
         variant_keys=("a",),
         model_ids=("cheap/model",),
         case_count=10,
@@ -50,7 +52,7 @@ def test_a_plan_estimates_cost_from_real_prices() -> None:
 def test_the_dearer_model_makes_the_plan_dearer() -> None:
     def cost_of(model_id: str) -> float:
         estimate = sweep.plan(
-            variant_keys=("a",), model_ids=(model_id,), case_count=10,
+            framework_keys=("openai",), variant_keys=("a",), model_ids=(model_id,), case_count=10,
             judged_metric_count=0, registry=a_registry(),
         ).estimated_cost
         assert estimate is not None
@@ -64,7 +66,7 @@ def test_an_unpriced_model_makes_the_estimate_unknown_not_zero() -> None:
         fetch=lambda: {"data": [{"id": "free/model", "pricing": {"prompt": "0", "completion": "0"}}]}
     )
     plan = sweep.plan(
-        variant_keys=("a",), model_ids=("free/model",), case_count=4,
+        framework_keys=("openai",), variant_keys=("a",), model_ids=("free/model",), case_count=4,
         judged_metric_count=1, registry=registry,
     )
     assert plan.estimated_cost is None
@@ -74,7 +76,7 @@ def test_an_unpriced_model_makes_the_estimate_unknown_not_zero() -> None:
 def test_an_empty_plan_is_refused() -> None:
     for variants, models, cases in ((), ("m",), 3), (("a",), (), 3), (("a",), ("m",), 0):
         plan = sweep.plan(
-            variant_keys=variants, model_ids=models, case_count=cases,
+            framework_keys=("openai",), variant_keys=variants, model_ids=models, case_count=cases,
             judged_metric_count=1, registry=a_registry(),
         )
         assert not plan.is_runnable
@@ -84,8 +86,10 @@ def test_an_empty_plan_is_refused() -> None:
 
 
 def cell(variant: str, model: str, score: float | None, usage: TokenUsage, *,
-         failed: bool = False, passed_all: bool = True) -> sweep.SweepCell:
+         failed: bool = False, passed_all: bool = True,
+         framework: str = "openai") -> sweep.SweepCell:
     return sweep.SweepCell(
+        framework=framework,
         variant_key=variant, model_id=model, settings=ModelSettings(),
         score=score, usage=usage, failed=failed, failure="boom" if failed else "",
         met_every_threshold=passed_all,
@@ -158,3 +162,102 @@ def test_a_cell_reports_its_measured_cost_per_thousand_calls() -> None:
 def test_cost_is_unknown_when_the_provider_reported_no_usage() -> None:
     ranked = sweep.rank((cell("a", "cheap/model", 0.8, TokenUsage()),), registry=a_registry())
     assert ranked[0].cost_per_thousand(a_registry()) is None
+
+
+# --- the framework axis ---------------------------------------------------
+
+FRAMEWORKS = ("openai", "langchain")
+
+
+def test_a_cell_is_a_framework_a_variant_and_a_model() -> None:
+    ran: list[tuple[str, str, str]] = []
+
+    def run_cell(framework: str, variant_key: str, model_id: str) -> sweep.SweepCell:
+        ran.append((framework, variant_key, model_id))
+        return sweep.SweepCell(
+            framework=framework,
+            variant_key=variant_key,
+            model_id=model_id,
+            settings=ModelSettings(),
+            score=0.9,
+            usage=TokenUsage(100, 20),
+        )
+
+    cells = sweep.run(
+        framework_keys=FRAMEWORKS,
+        variant_keys=("a", "b"),
+        model_ids=("cheap/model",),
+        run_cell=run_cell,
+    )
+    assert len(cells) == 4
+    assert ran == [
+        ("openai", "a", "cheap/model"),
+        ("openai", "b", "cheap/model"),
+        ("langchain", "a", "cheap/model"),
+        ("langchain", "b", "cheap/model"),
+    ]
+    assert {cell.framework for cell in cells} == set(FRAMEWORKS)
+
+
+def test_the_same_variant_and_model_on_two_frameworks_are_two_configurations() -> None:
+    registry = a_registry()
+    cells = (
+        cell("a", "cheap/model", 0.9, TokenUsage(100, 20), framework="openai"),
+        cell("a", "cheap/model", 0.9, TokenUsage(100, 20), framework="langchain"),
+    )
+    ranked = sweep.rank(cells, registry=registry)
+    assert {cell.framework for cell in ranked} == {"openai", "langchain"}
+    assert len(ranked) == 2
+
+
+def test_the_preview_counts_the_framework_axis() -> None:
+    plan = sweep.plan(
+        framework_keys=FRAMEWORKS,
+        variant_keys=("a", "b"),
+        model_ids=("cheap/model",),
+        case_count=3,
+        judged_metric_count=1,
+        registry=a_registry(),
+    )
+    assert plan.model_calls == 2 * 2 * 1 * 3
+    assert plan.judge_calls == plan.model_calls
+
+
+def test_a_tool_round_costs_more_than_one_model_call_per_case_and_says_so() -> None:
+    plan = sweep.plan(
+        framework_keys=("openai",),
+        variant_keys=("a",),
+        model_ids=("cheap/model",),
+        case_count=2,
+        judged_metric_count=0,
+        registry=a_registry(),
+        calls_per_case=2,
+    )
+    assert plan.model_calls == 4
+    assert "tool" in plan.summary().lower()
+    assert plan.calls_per_case == 2
+
+
+def test_a_round_without_tools_counts_one_call_per_case() -> None:
+    plan = sweep.plan(
+        framework_keys=("openai",),
+        variant_keys=("a",),
+        model_ids=("cheap/model",),
+        case_count=2,
+        judged_metric_count=0,
+        registry=a_registry(),
+    )
+    assert plan.model_calls == 2
+    assert "tool" not in plan.summary().lower()
+
+
+def test_a_plan_needs_a_framework_to_be_runnable() -> None:
+    plan = sweep.plan(
+        framework_keys=(),
+        variant_keys=("a",),
+        model_ids=("cheap/model",),
+        case_count=1,
+        judged_metric_count=0,
+        registry=a_registry(),
+    )
+    assert plan.is_runnable is False

@@ -392,7 +392,7 @@ def _generate_variants(workbench: Session, approaches: Sequence[VariantApproach]
 
 
 def _metrics(workbench: Session) -> None:
-    st.subheader("4 · Metrics")
+    st.subheader("5 · Metrics")
     if workbench.task_type is None:
         st.info("Pick the kind of job first.")
         return
@@ -478,7 +478,7 @@ def _metrics(workbench: Session) -> None:
 
 
 def _sweep(workbench: Session) -> None:
-    st.subheader("5 · Sweep")
+    st.subheader("6 · Sweep")
     if not workbench.variants or not workbench.cases:
         st.info("Add at least one prompt variant above — generate them, or paste one you have.")
         return
@@ -534,9 +534,9 @@ def _sweep(workbench: Session) -> None:
         else NO_KEY if not session.has_credentials()
         else "Pick at least one model, one variant and one framework."
         if not plan.is_runnable
-        else "Enable at least one metric in step 4 — an unmeasured sweep decides nothing."
+        else "Enable at least one metric in step 5 — an unmeasured sweep decides nothing."
         if not workbench.enabled_metrics
-        else f"{len(problems)} metric(s) in step 4 still need something. See the warnings there."
+        else f"{len(problems)} metric(s) in step 5 still need something. See the warnings there."
         if problems
         else None
     )

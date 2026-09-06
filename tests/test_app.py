@@ -117,12 +117,12 @@ def test_the_title_and_version_are_shown(monkeypatch):
     assert prompt_workbench.__version__ in _rendered(at)
 
 
-def test_all_five_steps_are_on_one_page(monkeypatch):
+def test_all_six_steps_are_on_one_page(monkeypatch):
     """Sections rather than tabs: each step only means anything once the one
     before it exists."""
     rendered = _rendered(_run(monkeypatch))
     for step in ("1 · Your case", "2 · Test cases", "3 · Prompt variants",
-                 "4 · Metrics", "5 · Sweep"):
+                 "4 · The round", "5 · Metrics", "6 · Sweep"):
         assert step in rendered, step
 
 
@@ -385,6 +385,14 @@ def test_a_described_case_settles_the_job_picker_too(monkeypatch):
 
 
 def _ready_to_sweep(monkeypatch, *, credentials: bool = False, description: str = ""):
+    """Walk the page to the point where a sweep could run.
+
+    The sweep section is gated on the metric layer, so without that optional
+    extra there is nothing here to assert on — an uninstalled extra is a
+    supported state, not a failure.
+    """
+    if not deepeval_metrics.is_available():
+        pytest.skip("needs the deepeval extra")
     at = _run(monkeypatch, credentials=credentials)
     if description:
         at = _description_box(at).set_value(description).run()
@@ -429,7 +437,7 @@ def test_a_sweep_whose_metrics_are_unconfigured_points_at_the_metric_step(monkey
     )
     button = _sweep_button(at)
     assert button.disabled
-    assert button.help and "step 4" in button.help
+    assert button.help and "step 5" in button.help
 
 
 def test_a_sweep_with_no_metric_left_on_refuses(monkeypatch):
@@ -676,6 +684,7 @@ def test_the_statements_come_from_the_same_source_as_the_document(monkeypatch):
 
 
 def test_anthropic_needs_its_own_key_and_says_so(monkeypatch):
+    pytest.importorskip("anthropic", reason="needs the anthropic extra")
     at = _run(monkeypatch, credentials=True)
     labels = {field.label for field in at.sidebar.text_input}
     assert "Anthropic API key" in labels
@@ -693,6 +702,7 @@ def test_the_anthropic_models_never_appear_in_the_provider_picker(monkeypatch):
 
 
 def test_choosing_anthropic_shows_its_own_catalogue_and_its_staleness(monkeypatch):
+    pytest.importorskip("anthropic", reason="needs the anthropic extra")
     from prompt_workbench.services import anthropic_catalog
 
     at = _run(monkeypatch, credentials=True)

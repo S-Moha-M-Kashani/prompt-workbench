@@ -57,7 +57,7 @@ DEFAULT_SHAPE_SCHEMA = json.dumps(
 
 def render(workbench: Session) -> None:
     """The round, assembled top to bottom."""
-    st.subheader("The round")
+    st.subheader("4 · The round")
     st.caption(
         "One LLM call as it will actually ship: a system prompt, a user prompt, "
         "optionally mocked tools and optionally a fixed answer shape. An agent "

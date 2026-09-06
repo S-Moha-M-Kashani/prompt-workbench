@@ -38,6 +38,7 @@ JUDGE_TOKENS_OUT = 120
 class SweepPlan:
     """What a sweep would do, priced, before it is allowed to do it."""
 
+    framework_keys: tuple[str, ...]
     variant_keys: tuple[str, ...]
     model_ids: tuple[str, ...]
     case_count: int
@@ -46,46 +47,71 @@ class SweepPlan:
     judge_calls: int
     estimated_cost: float | None
     has_unpriced_model: bool
+    #: Model calls one case is assumed to make. More than one when the round
+    #: sends tools, because a tool round-trip is a second call to the model.
+    calls_per_case: int = 1
 
     @property
     def is_runnable(self) -> bool:
-        return bool(self.variant_keys and self.model_ids and self.case_count > 0)
+        return bool(
+            self.framework_keys
+            and self.variant_keys
+            and self.model_ids
+            and self.case_count > 0
+        )
 
     @property
     def total_calls(self) -> int:
         return self.model_calls + self.judge_calls
 
     def summary(self) -> str:
-        variants = len(self.variant_keys)
-        models = len(self.model_ids)
         cost = (
             "cost unknown — some models publish no price"
             if self.estimated_cost is None
             else f"est. ${self.estimated_cost:.2f}"
         )
+        tools = (
+            ""
+            if self.calls_per_case == 1
+            else (
+                f" This round sends tools, so each case is counted as "
+                f"{self.calls_per_case} model calls rather than one."
+            )
+        )
         return (
-            f"{variants} variant(s) × {models} model(s) × {self.case_count} case(s) "
-            f"= {self.model_calls} model calls and {self.judge_calls} judge calls · {cost}"
+            f"{len(self.framework_keys)} framework(s) × {len(self.variant_keys)} "
+            f"variant(s) × {len(self.model_ids)} model(s) × {self.case_count} case(s) "
+            f"= {self.model_calls} model calls and {self.judge_calls} judge calls "
+            f"· {cost}.{tools}"
         )
 
 
 def plan(
     *,
+    framework_keys: Sequence[str],
     variant_keys: Sequence[str],
     model_ids: Sequence[str],
     case_count: int,
     judged_metric_count: int,
     registry: ModelRegistry,
     judge_price_per_million: float = 0.6,
+    calls_per_case: int = 1,
 ) -> SweepPlan:
     """Price a sweep before running it.
 
     The estimate uses assumed token shapes, so it is approximate — but it is
     approximate in dollars, which is the unit the decision is actually made in.
+
+    ``calls_per_case`` is stated rather than inferred: nobody can know how many
+    tool round-trips a model will ask for, and quietly assuming one call per
+    case would understate a tool-calling sweep by exactly the amount that
+    matters. One judge call per case per judged metric, regardless — a judge
+    reads the finished answer, not each step.
     """
-    cells = len(variant_keys) * len(model_ids)
-    model_calls = cells * case_count
-    judge_calls = model_calls * judged_metric_count
+    per_case = max(1, calls_per_case)
+    cells = len(framework_keys) * len(variant_keys) * len(model_ids)
+    model_calls = cells * case_count * per_case
+    judge_calls = cells * case_count * judged_metric_count
 
     unpriced = False
     total = 0.0
@@ -98,7 +124,9 @@ def plan(
             ASSUMED_TOKENS_IN * entry.price_in_per_million
             + ASSUMED_TOKENS_OUT * entry.price_out_per_million
         ) / 1_000_000
-        total += per_call * len(variant_keys) * case_count
+        total += (
+            per_call * len(framework_keys) * len(variant_keys) * case_count * per_case
+        )
 
     total += (
         judge_calls
@@ -108,6 +136,7 @@ def plan(
     )
 
     return SweepPlan(
+        framework_keys=tuple(framework_keys),
         variant_keys=tuple(variant_keys),
         model_ids=tuple(model_ids),
         case_count=case_count,
@@ -116,13 +145,21 @@ def plan(
         judge_calls=judge_calls,
         estimated_cost=None if unpriced else total,
         has_unpriced_model=unpriced,
+        calls_per_case=per_case,
     )
 
 
 @dataclass(frozen=True)
 class SweepCell:
-    """One variant on one model: what it scored and what it cost."""
+    """One framework, variant and model: what it scored and what it cost.
 
+    The framework is part of the configuration, not a detail of how it ran. The
+    same variant and model through two frameworks are two answers to "what
+    should we ship", and a result that did not name its framework would be a
+    number nobody could reproduce.
+    """
+
+    framework: str
     variant_key: str
     model_id: str
     settings: ModelSettings
@@ -149,6 +186,7 @@ def _sort_key(cell: SweepCell, registry: ModelRegistry) -> tuple:
         -(cell.score if cell.score is not None else -1.0),
         cost if cost is not None else float("inf"),
         cell.model_id,
+        cell.framework,
     )
 
 
@@ -178,11 +216,12 @@ def cheapest_passing(
     )
 
 
-CellRunner = Callable[[str, str], SweepCell]
+CellRunner = Callable[[str, str, str], SweepCell]
 
 
 def run(
     *,
+    framework_keys: Sequence[str],
     variant_keys: Sequence[str],
     model_ids: Sequence[str],
     run_cell: CellRunner,
@@ -193,20 +232,22 @@ def run(
     combinations have already been paid for by the time it happens.
     """
     cells: list[SweepCell] = []
-    for variant_key in variant_keys:
-        for model_id in model_ids:
-            try:
-                cells.append(run_cell(variant_key, model_id))
-            except Exception as error:  # noqa: BLE001 - one cell, one failure
-                cells.append(
-                    SweepCell(
-                        variant_key=variant_key,
-                        model_id=model_id,
-                        settings=ModelSettings(),
-                        score=None,
-                        usage=TokenUsage(),
-                        failed=True,
-                        failure=str(error) or error.__class__.__name__,
+    for framework in framework_keys:
+        for variant_key in variant_keys:
+            for model_id in model_ids:
+                try:
+                    cells.append(run_cell(framework, variant_key, model_id))
+                except Exception as error:  # noqa: BLE001 - one cell, one failure
+                    cells.append(
+                        SweepCell(
+                            framework=framework,
+                            variant_key=variant_key,
+                            model_id=model_id,
+                            settings=ModelSettings(),
+                            score=None,
+                            usage=TokenUsage(),
+                            failed=True,
+                            failure=str(error) or error.__class__.__name__,
+                        )
                     )
-                )
     return tuple(cells)

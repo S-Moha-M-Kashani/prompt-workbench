@@ -33,6 +33,9 @@ class FrameworkEntry:
     builder: Callable[..., LlmCall]
     #: What this adapter carries through from the request, for the picker to say.
     forwards: tuple[str, ...] = ("tools", "output structure", "model parameters")
+    #: Whether this framework talks to a provider other than the workbench's own,
+    #: which means its own credential and its own price list.
+    reaches_own_provider: bool = False
     note: str = ""
 
     def is_available(self) -> bool:
@@ -64,6 +67,12 @@ def _langgraph_builder(**kwargs: Any) -> LlmCall:
     from prompt_workbench.llm_call.langgraph_call import LangGraphCall
 
     return LangGraphCall(**kwargs)
+
+
+def _anthropic_builder(**kwargs: Any) -> LlmCall:
+    from prompt_workbench.llm_call.anthropic_call import AnthropicCall
+
+    return AnthropicCall(**kwargs)
 
 
 _ENTRIES: tuple[FrameworkEntry, ...] = (
@@ -98,6 +107,20 @@ _ENTRIES: tuple[FrameworkEntry, ...] = (
         note=(
             "A two-node graph built here rather than a prebuilt agent, so what is "
             "measured is the graph runtime and not LangChain's agent again."
+        ),
+    ),
+    FrameworkEntry(
+        key="anthropic",
+        label="Anthropic SDK (separate provider)",
+        install_hint="uv sync --extra anthropic",
+        import_names=("anthropic",),
+        builder=_anthropic_builder,
+        forwards=("tools", "model parameters"),
+        reaches_own_provider=True,
+        note=(
+            "Reaches Anthropic directly, not the workbench's provider. It needs "
+            "its own API key, and its models and prices are a separate catalogue "
+            "— they are never mixed into the main model list."
         ),
     ),
 )

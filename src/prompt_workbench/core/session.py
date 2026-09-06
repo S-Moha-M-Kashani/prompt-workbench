@@ -339,18 +339,76 @@ class Session:
         """The sentence saying which of the two is in force."""
         return shapes.enforcement_note(self.structure_is_enforced)
 
+    class ToolsUnsupported(RuntimeError):
+        """The selected model does not publish a tool surface."""
+
+    @property
+    def round_blockers(self) -> tuple[str, ...]:
+        """Why this round cannot be run, in the words the interface will use.
+
+        Returned as reasons rather than a bare boolean so the run control can
+        say what is missing. A disabled button with no explanation is the same
+        dead end as a silent failure.
+        """
+        reasons: list[str] = []
+        if not self.system_prompt.strip():
+            reasons.append("The round needs a system prompt.")
+        if not self.user_prompt.strip():
+            reasons.append("The round needs a user prompt.")
+        if not self.round_model_id:
+            reasons.append("No model is selected for the round.")
+        elif self.tools and not self.registry.supports_tools(self.round_model_id):
+            reasons.append(
+                f"{self.round_model_id} publishes no tool-use parameter, so a "
+                "tool-calling round against it would not be a tool-calling "
+                "measurement. Switch the tools off or pick another model."
+            )
+        if not self.framework_keys:
+            reasons.append("No framework is selected.")
+        return tuple(reasons)
+
     @property
     def round_is_runnable(self) -> bool:
-        return bool(
-            self.system_prompt.strip() and self.user_prompt.strip() and self.round_model_id
+        return not self.round_blockers
+
+    def request_for(
+        self, *, system_prompt: str, user_prompt: str, model_id: str
+    ) -> CallRequest:
+        """A request carrying the round's tools, shape and settings, other prompts.
+
+        The sweep needs exactly this: each cell substitutes a variant's prompt
+        and a case's input while keeping everything else the round declared —
+        including the enforcement flag, which depends on the cell's own model
+        rather than the one the lab has selected.
+        """
+        return CallRequest(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            model_id=model_id,
+            settings=self._settings,
+            tools=self.tools,
+            output_structure=self.output_structure,
+            structure_is_enforced=(
+                self.output_structure is not None
+                and self.registry.can_enforce_structure(model_id)
+            ),
         )
 
     def call_request(self) -> CallRequest:
-        """The round as one value, with the enforcement flag honestly set."""
-        if not self.round_is_runnable:
-            raise ValueError(
-                "A round needs a system prompt, a user prompt and a selected model."
+        """The round as one value, with the enforcement flag honestly set.
+
+        Refuses before any call is made — a round that could not be honestly
+        measured must cost nothing to find that out.
+        """
+        if self.tools and self.round_model_id and not self.registry.supports_tools(
+            self.round_model_id
+        ):
+            raise self.ToolsUnsupported(
+                f"{self.round_model_id} publishes no tool-use parameter; "
+                "this round would not measure tool calling."
             )
+        if not self.round_is_runnable:
+            raise ValueError("; ".join(self.round_blockers))
         return CallRequest(
             system_prompt=self.system_prompt,
             user_prompt=self.user_prompt,

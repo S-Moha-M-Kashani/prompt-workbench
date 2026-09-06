@@ -226,8 +226,13 @@ def test_generating_variants_does_not_discard_your_own() -> None:
 # --- sweep results stay tied to the work that produced them ---------------
 
 
-def a_cell(variant_key: str = "v1", model_id: str = "cheap/model") -> SweepCell:
+def a_cell(
+    variant_key: str = "v1",
+    model_id: str = "cheap/model",
+    framework: str = "openai",
+) -> SweepCell:
     return SweepCell(
+        framework=framework,
         variant_key=variant_key,
         model_id=model_id,
         settings=ModelSettings(),
@@ -407,3 +412,106 @@ def test_applying_a_kit_over_untouched_fields_needs_no_confirmation() -> None:
     session.apply_kit(task_catalog.get("routing"))
     session.apply_kit(task_catalog.get("classification"))
     assert "closed set" in session.system_prompt
+
+
+def test_a_tool_round_against_a_model_without_tool_support_is_refused() -> None:
+    """Named before the call, not discovered by paying for it."""
+    from prompt_workbench.models.call import ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    session.set_round_model("plain/model")
+
+    with pytest.raises(Session.ToolsUnsupported, match="plain/model"):
+        session.call_request()
+    assert any("tool-use parameter" in reason for reason in session.round_blockers)
+
+
+def test_the_same_tool_round_is_allowed_on_a_model_that_publishes_tools() -> None:
+    from prompt_workbench.models.call import ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    assert session.call_request().sends_tools is True
+
+
+def test_a_round_missing_a_prompt_says_which_one() -> None:
+    session = a_round_session()
+    session.set_prompts(system_prompt="Be brief.", user_prompt="")
+    assert session.round_is_runnable is False
+    assert any("user prompt" in reason for reason in session.round_blockers)
+
+
+def test_the_round_moving_discards_the_results_it_produced() -> None:
+    """A score is a statement about one exact configuration. Change the tool
+    set, the answer shape, the frameworks or the kind of job and the number on
+    screen describes something that no longer exists."""
+    from prompt_workbench.models.call import OutputStructure, ToolSpec
+
+    def swept_round() -> Session:
+        session = a_round_session()
+        session.sweep_results = (a_cell(),)
+        return session
+
+    changes = {
+        "a tool definition": lambda s: s.set_tools(
+            (ToolSpec(name="lookup", description="Look up."),)
+        ),
+        "the output structure": lambda s: s.set_output_structure(
+            OutputStructure(name="v", schema={"type": "object"})
+        ),
+        "a framework selection": lambda s: s.set_framework_keys(("openai", "langchain")),
+        "the prompts": lambda s: s.set_prompts(system_prompt="New.", user_prompt="New."),
+        "the model under test": lambda s: s.set_round_model("plain/model"),
+    }
+    for label, change in changes.items():
+        session = swept_round()
+        change(session)
+        assert session.sweep_results == (), label
+
+
+def test_rewriting_the_round_with_the_same_values_keeps_the_results() -> None:
+    """The page reassigns these on every rerun; results must not vanish as they
+    are drawn."""
+    session = a_round_session()
+    session.sweep_results = (a_cell(),)
+    session.set_prompts(system_prompt="Be brief.", user_prompt="Say hello.")
+    session.set_tools(())
+    session.set_framework_keys(("openai",))
+    session.set_round_model("rich/model")
+    assert session.sweep_results != ()
+
+
+def test_changing_the_kind_of_job_discards_the_results() -> None:
+    session = a_round_session()
+    session.set_task_type(task_catalog.get("classification"))
+    session.sweep_results = (a_cell(),)
+    session.set_task_type(task_catalog.get("routing"))
+    assert session.sweep_results == ()
+
+
+def test_a_sweep_cell_keeps_the_rounds_tools_and_shape_with_its_own_prompts() -> None:
+    from prompt_workbench.models.call import OutputStructure, ToolSpec
+
+    session = a_round_session()
+    session.set_tools((ToolSpec(name="lookup", description="Look up."),))
+    session.set_output_structure(OutputStructure(name="v", schema={"type": "object"}))
+
+    request = session.request_for(
+        system_prompt="A variant's prompt.", user_prompt="A case.", model_id="rich/model"
+    )
+    assert request.system_prompt == "A variant's prompt."
+    assert request.tool_names == ("lookup",)
+    assert request.structure_is_enforced is True
+
+
+def test_enforcement_follows_the_cells_own_model_not_the_labs() -> None:
+    """A sweep varies the model, so the flag has to be recomputed per cell."""
+    from prompt_workbench.models.call import OutputStructure
+
+    session = a_round_session()
+    session.set_output_structure(OutputStructure(name="v", schema={"type": "object"}))
+    request = session.request_for(
+        system_prompt="p", user_prompt="u", model_id="plain/model"
+    )
+    assert request.structure_is_enforced is False

@@ -68,6 +68,42 @@ def _run(monkeypatch, *, credentials: bool = False):
     return AppTest.from_file(APP).run()
 
 
+class _FakeRunner:
+    """A framework that answers without a network, for the lab's own tests."""
+
+    def __init__(self, result):
+        self._result = result
+        self.requests = []
+
+    def run(self, request):
+        self.requests.append(request)
+        return self._result
+
+    def describe(self) -> str:
+        return "fake"
+
+
+def _with_fake_runner(monkeypatch, *, tool_calls=()):
+    """Inject a CallRunner, so no test ever runs a real round."""
+    from prompt_workbench.models.call import CallResult
+    from prompt_workbench.models.usage import TokenUsage
+    from prompt_workbench.ui import lab
+
+    runner = _FakeRunner(
+        CallResult(
+            answer="Ada Lovelace.",
+            framework="openai",
+            model_id="openai/gpt-4o-mini",
+            usage=TokenUsage(tokens_in=120, tokens_out=18),
+            latency_ms=412.0,
+            tool_calls=tool_calls,
+            model_calls=2 if tool_calls else 1,
+        )
+    )
+    monkeypatch.setattr(lab.session, "call_runner", lambda key: runner)
+    return runner
+
+
 # --- it renders -----------------------------------------------------------
 
 
@@ -497,3 +533,170 @@ def test_a_further_parameter_can_be_added_from_the_models_own_list(monkeypatch):
     picker = next(box for box in at.selectbox if box.key == "extra_param_pick")
     assert picker.options, "the model publishes parameters beyond the five sliders"
     assert "temperature" not in picker.options, "already a slider"
+
+
+# --- the single-round lab -------------------------------------------------
+
+
+def _framework_picker(at):
+    return next(box for box in at.multiselect if box.key == "round_frameworks")
+
+
+def test_the_lab_lists_every_framework_with_its_availability(monkeypatch):
+    from prompt_workbench.llm_call import registry as frameworks
+
+    at = _run(monkeypatch, credentials=True)
+    offered = " ".join(_framework_picker(at).options)
+    for entry in frameworks.all_frameworks():
+        assert entry.label in offered, entry.key
+
+
+def test_an_unavailable_framework_is_named_with_its_install_command(monkeypatch):
+    from prompt_workbench.llm_call import registry as frameworks
+
+    def nothing_optional(name, *args, **kwargs):
+        return None if name != "openai" else object()
+
+    monkeypatch.setattr(frameworks.importlib.util, "find_spec", nothing_optional)
+    at = _run(monkeypatch, credentials=True)
+    assert "uv sync --extra langchain" in _rendered(at)
+
+
+def test_the_round_requires_both_prompts(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    labels = {area.label for area in at.text_area}
+    assert {"Round system prompt", "Round user prompt"} <= labels
+    button = _run_round_button(at)
+    assert button.disabled
+    assert button.help and "system prompt" in button.help
+
+
+def _run_round_button(at):
+    return next(button for button in at.button if button.label == "Run the round")
+
+
+def test_tools_are_switchable_with_a_name_and_a_description(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    switch = next(box for box in at.checkbox if box.key == "round_tools_on")
+    assert switch.value is False
+    at = switch.set_value(True).run()
+    labels = {field.label for field in at.text_input}
+    assert "Tool name" in labels
+    labels = {area.label for area in at.text_area}
+    assert "Tool description" in labels
+
+
+def test_the_run_is_disabled_without_a_credential(monkeypatch):
+    at = _run(monkeypatch, credentials=False)
+    button = _run_round_button(at)
+    assert button.disabled
+    assert button.help and "API key" in button.help
+
+
+def test_the_result_panel_reports_what_the_round_actually_cost(monkeypatch):
+    """Answer, latency, tokens each way, model calls, cost or unknown, trace."""
+    _with_fake_runner(monkeypatch)
+    at = _run(monkeypatch, credentials=True)
+    at = _prepared_round(at)
+    at = _run_round_button(at).click().run()
+    text = _rendered(at)
+    for expected in ("Latency", "Tokens in", "Tokens out", "Model calls"):
+        assert expected in text, expected
+    assert "Ada Lovelace" in text
+
+
+def _prepared_round(at):
+    at = next(a for a in at.text_area if a.label == "Round system prompt").set_value(
+        "Be brief."
+    ).run()
+    return next(a for a in at.text_area if a.label == "Round user prompt").set_value(
+        "Who is customer 7?"
+    ).run()
+
+
+def test_the_tool_trace_is_shown_in_the_order_it_happened(monkeypatch):
+    from prompt_workbench.models.call import ToolInvocation
+
+    _with_fake_runner(
+        monkeypatch,
+        tool_calls=(
+            ToolInvocation(name="lookup", arguments={"id": 7}, order=0),
+            ToolInvocation(name="notify", arguments={}, order=1),
+        ),
+    )
+    at = _run(monkeypatch, credentials=True)
+    at = next(box for box in at.checkbox if box.key == "round_tools_on").set_value(True).run()
+    at = _prepared_round(at)
+    at = _run_round_button(at).click().run()
+    assert "tool trace" in _rendered(at).lower()
+
+
+# --- the call as code -----------------------------------------------------
+
+
+def test_the_sketch_opens_on_request_and_is_labelled_as_a_representation(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    at = _prepared_round(at)
+    at = next(box for box in at.checkbox if box.key == "show_sketch").set_value(True).run()
+    text = _rendered(at)
+    assert "chat.completions.create" in " ".join(block.value for block in at.code)
+    assert "not the workbench's own code" in text
+
+
+def test_the_sketch_is_not_offered_as_a_file(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    at = _prepared_round(at)
+    at = next(box for box in at.checkbox if box.key == "show_sketch").set_value(True).run()
+    assert not list(at.get("download_button")), "a sketch is a picture, not an export"
+
+
+# --- the limits stay next to the numbers ----------------------------------
+
+
+def test_every_required_statement_reaches_the_page_showing_the_numbers(monkeypatch):
+    from prompt_workbench.core import considerations
+
+    _with_fake_runner(monkeypatch)
+    at = _run(monkeypatch, credentials=True)
+    at = _prepared_round(at)
+    at = _run_round_button(at).click().run()
+    text = " ".join(_rendered(at).split())
+    for item in considerations.all_considerations():
+        assert " ".join(item.statement.split()) in text, item.key
+
+
+def test_the_statements_come_from_the_same_source_as_the_document(monkeypatch):
+    """Not retyped into the UI: the page reads the module the doc quotes."""
+    from prompt_workbench.ui import lab
+
+    assert lab.considerations.all_considerations()
+
+
+# --- the second provider stays a second catalogue -------------------------
+
+
+def test_anthropic_needs_its_own_key_and_says_so(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    labels = {field.label for field in at.sidebar.text_input}
+    assert "Anthropic API key" in labels
+
+
+def test_the_anthropic_models_never_appear_in_the_provider_picker(monkeypatch):
+    """A Claude model priced from the workbench's provider list would be a
+    fabricated number wearing the look of a measured one."""
+    from prompt_workbench.services import anthropic_catalog
+
+    at = _run(monkeypatch, credentials=True)
+    offered = set(_round_model_picker(at).options)
+    for entry in anthropic_catalog.all_models():
+        assert entry.id not in offered, entry.id
+
+
+def test_choosing_anthropic_shows_its_own_catalogue_and_its_staleness(monkeypatch):
+    from prompt_workbench.services import anthropic_catalog
+
+    at = _run(monkeypatch, credentials=True)
+    at = _framework_picker(at).set_value(["Anthropic SDK (separate provider)"]).run()
+    text = _rendered(at)
+    assert "claude-opus-5" in text or "Claude Opus 5" in text
+    assert anthropic_catalog.AS_OF in text

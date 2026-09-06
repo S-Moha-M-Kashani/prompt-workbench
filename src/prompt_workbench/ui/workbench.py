@@ -18,7 +18,7 @@ from dataclasses import replace
 
 import streamlit as st
 
-from prompt_workbench.core import case_intake, one_shot, scoring, sweep, variants
+from prompt_workbench.core import case_intake, scoring, sweep, variants
 from prompt_workbench.core.session import Session
 from prompt_workbench.core.sweep import SweepCell
 from prompt_workbench.models.case import CaseBrief, EvalCase
@@ -502,10 +502,19 @@ def _sweep(workbench: Session) -> None:
     )
 
     plan = sweep.plan(
+        framework_keys=workbench.framework_keys,
         variant_keys=tuple(variant_ids), model_ids=tuple(models),
         case_count=len(workbench.cases),
         judged_metric_count=workbench.judged_metric_count,
         registry=registry,
+        # A tool round-trip is a second call to the model. Nobody can know how
+        # many the model will ask for, so the preview states its assumption
+        # rather than quietly counting one call per case.
+        calls_per_case=2 if workbench.tools else 1,
+    )
+    st.caption(
+        "Frameworks come from the round above: "
+        + ", ".join(f"`{key}`" for key in workbench.framework_keys)
     )
     st.info(plan.summary())
     if plan.has_unpriced_model:
@@ -523,7 +532,7 @@ def _sweep(workbench: Session) -> None:
     reason = (
         NO_CASE if brief is None
         else NO_KEY if not session.has_credentials()
-        else "Pick at least one model and one variant."
+        else "Pick at least one model, one variant and one framework."
         if not plan.is_runnable
         else "Enable at least one metric in step 4 — an unmeasured sweep decides nothing."
         if not workbench.enabled_metrics
@@ -550,38 +559,57 @@ def _run_sweep(
         st.error(NO_CASE)
         return
     judge = session.judge()
-    complete = session.completion_with_usage()
     progress = st.progress(0.0, text="Running…")
-    total = max(len(variant_ids) * len(model_ids), 1)
+    total = max(
+        len(workbench.framework_keys) * len(variant_ids) * len(model_ids), 1
+    )
     done = 0
 
-    def run_cell(variant_id: str, model_id: str) -> sweep.SweepCell:
+    def run_cell(framework: str, variant_id: str, model_id: str) -> sweep.SweepCell:
+        """One configuration, over every case, through the framework it names."""
         nonlocal done
         variant = workbench.variant(variant_id)
+        runner = session.call_runner(framework)
         outcomes: list[scoring.MetricOutcome] = []
         spent_in = spent_out = 0
         for case in workbench.cases:
-            record = one_shot.run_plain(
-                system_prompt=variant.system_prompt, user_message=case.input,
-                model=model_id, settings=workbench.settings, complete=complete,
+            request = workbench.request_for(
+                system_prompt=variant.system_prompt,
+                user_prompt=case.input,
+                model_id=model_id,
             )
-            spent_in += record[1].tokens_in
-            spent_out += record[1].tokens_out
+            result = runner.run(request)
+            if result.failed:
+                raise RuntimeError(result.error or "the round failed")
+            spent_in += result.usage.tokens_in
+            spent_out += result.usage.tokens_out
             for choice in workbench.enabled_metrics:
                 outcomes.append(
-                    scoring.score_one(case=case, response=record[0], choice=choice, judge=judge)
+                    scoring.score_one(
+                        case=case,
+                        response=result.answer,
+                        choice=choice,
+                        judge=judge,
+                        tool_calls=result.tool_calls,
+                    )
                 )
         done += 1
         progress.progress(done / total, text=f"{done}/{total} combinations")
+        cases = max(len(workbench.cases), 1)
         return sweep.SweepCell(
+            framework=framework,
             variant_key=variant_id, model_id=model_id, settings=workbench.settings,
             score=scoring.aggregate(outcomes),
-            usage=TokenUsage(tokens_in=spent_in // max(len(workbench.cases), 1),
-                             tokens_out=spent_out // max(len(workbench.cases), 1)),
+            usage=TokenUsage(tokens_in=spent_in // cases, tokens_out=spent_out // cases),
             met_every_threshold=scoring.met_every_threshold(outcomes),
         )
 
-    cells = sweep.run(variant_keys=variant_ids, model_ids=model_ids, run_cell=run_cell)
+    cells = sweep.run(
+        framework_keys=workbench.framework_keys,
+        variant_keys=variant_ids,
+        model_ids=model_ids,
+        run_cell=run_cell,
+    )
     progress.empty()
     workbench.sweep_results = cells
     st.rerun()
@@ -595,11 +623,17 @@ def _render_results(workbench: Session, cells: Sequence[SweepCell]) -> None:
         cost = cell.cost_per_thousand(registry)
         cost_text = "cost unknown" if cost is None else f"${cost:.3f} / 1k calls"
         if cell.failed:
-            st.error(f"**{label}** on `{cell.model_id}` failed: {cell.failure}")
+            st.error(
+                f"**{label}** on `{cell.model_id}` via `{cell.framework}` "
+                f"failed: {cell.failure}"
+            )
         else:
             mark = "✓" if cell.met_every_threshold else "✗"
             score = "—" if cell.score is None else f"{cell.score:.2f}"
-            st.markdown(f"{mark} **{label}** on `{cell.model_id}` — {score} · {cost_text}")
+            st.markdown(
+                f"{mark} **{label}** on `{cell.model_id}` via `{cell.framework}` "
+                f"— {score} · {cost_text}"
+            )
 
     winner = sweep.cheapest_passing(cells, registry=registry)
     st.divider()
@@ -613,11 +647,16 @@ def _render_results(workbench: Session, cells: Sequence[SweepCell]) -> None:
     cost = winner.cost_per_thousand(registry)
     st.success(
         f"**Cheapest configuration that passed:** {workbench.variant(winner.variant_key).label} "
-        f"on `{winner.model_id}`"
+        f"on `{winner.model_id}` via `{winner.framework}`"
         + ("" if cost is None else f" at ${cost:.3f} per 1,000 calls")
     )
     st.markdown("Write this into the other project's test suite:")
-    lines = [f"# model: {winner.model_id}", f"# settings: {workbench.settings}", "metrics = ["]
+    lines = [
+        f"# framework: {winner.framework}",
+        f"# model: {winner.model_id}",
+        f"# settings: {workbench.settings}",
+        "metrics = [",
+    ]
     lines += [f"    {choice.as_code()}," for choice in workbench.enabled_metrics]
     lines.append("]")
     st.code("\n".join(lines), language="python")

@@ -30,6 +30,10 @@ class EvalCase:
     expected_output: str | None = None
     context: tuple[str, ...] = ()
     retrieval_context: tuple[str, ...] = ()
+    #: The tools this case should have made the model ask for, in any order.
+    #: A case's criteria are its ground truth, and for a tool-calling round the
+    #: tools are part of that truth.
+    expected_tools: tuple[str, ...] = ()
     notes: str = ""
 
     def __post_init__(self) -> None:
@@ -45,6 +49,8 @@ class EvalCase:
             fields.add("context")
         if self.retrieval_context:
             fields.add("retrieval_context")
+        if self.expected_tools:
+            fields.add("expected_tools")
         return fields
 
 

@@ -21,6 +21,9 @@ deepeval = ["deepeval>=4.0,<5"]
 # decides availability at call time and names the install command.
 langchain = ["langchain>=1.1,<2", "langchain-openai>=1.0,<2"]
 langgraph = ["langgraph>=1.0,<2", "langchain-openai>=1.0,<2"]
+# Reaches a different provider with its own credential and its own prices, so
+# its models are presented as a separate catalogue rather than merged in.
+anthropic = ["anthropic>=0.116"]
 
 [project.scripts]
 prompt-workbench = "prompt_workbench.cli:main"
@@ -55,5 +58,6 @@ module = [
     "langchain_core.*",
     "langchain_openai.*",
     "langgraph.*",
+    "anthropic.*",
 ]
 ignore_missing_imports = true

@@ -31,9 +31,38 @@ class OpenAiCall(LlmCall):
 
     framework = "openai"
 
-    def __init__(self, *, client: Any, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        client: Any | None = None,
+        api_key: str = "",
+        base_url: str | None = None,
+        **kwargs: Any,
+    ) -> None:
         super().__init__(**kwargs)
         self._client = client
+        self._api_key = api_key
+        self._base_url = base_url
+
+    @property
+    def client(self) -> Any:
+        """The injected client, or one built for this session's credential.
+
+        Every adapter takes ``api_key`` and ``base_url`` the same way, so the
+        wiring layer needs no per-framework branch — and a test still injects a
+        fake client and opens no socket.
+        """
+        if self._client is not None:
+            return self._client
+        from openai import OpenAI
+
+        if not self._api_key.strip():
+            raise ValueError(
+                "The provider API key must be passed explicitly; this adapter "
+                "never reads one from the environment."
+            )
+        self._client = OpenAI(base_url=self._base_url, api_key=self._api_key.strip())
+        return self._client
 
     def _invoke(self, request: CallRequest) -> InvocationOutcome:
         recorder = mock_tools.TraceRecorder()
@@ -45,7 +74,7 @@ class OpenAiCall(LlmCall):
         usages: list[TokenUsage] = []
 
         for _ in range(MAX_TOOL_ROUND_TRIPS + 1):
-            response = self._client.chat.completions.create(
+            response = self.client.chat.completions.create(
                 **self._params(request, messages)
             )
             usages.append(_usage_of(response))

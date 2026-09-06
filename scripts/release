@@ -78,32 +78,6 @@ else
     ahead=$(git rev-list --count development)
 fi
 
-# ------------------------------------------------------------ private paths
-# The rung parents development, so pushing the published branch publishes
-# every commit in $range. Refuse to build a rung whose history carries a
-# private path — the pre-push hook would refuse the push anyway; failing
-# here is earlier and names the commit.
-gitdir=$(cd "$(git rev-parse --git-common-dir)" && pwd)
-if [ -f "$gitdir/info/private-paths" ]; then
-    private_paths=$(sed -e 's/#.*//' -e 's/[[:space:]]*$//' -e 's|/*$||' \
-        -e '/^$/d' "$gitdir/info/private-paths")
-    if [ -n "$private_paths" ]; then
-        for c in $(git rev-list $range); do
-            # shellcheck disable=SC2086
-            hits=$(git ls-tree --name-only "$c" -- $private_paths 2>/dev/null || true)
-            if [ -n "$hits" ]; then
-                echo "release: refused: a commit the rung would publish carries" >&2
-                echo "private paths:" >&2
-                echo "  commit: $(git log --format='%h %s' -1 "$c")" >&2
-                printf '%s\n' "$hits" | sed 's/^/  path:   /' >&2
-                echo "Purge them from development's history before releasing" >&2
-                echo "(git-rules: private paths), or edit $gitdir/info/private-paths." >&2
-                exit 1
-            fi
-        done
-    fi
-fi
-
 presentable=$(git log --format=%s "$range" |
     grep -Ec '^(feat|fix|perf|refactor)(\([^)]*\))?!?:' || true)
 

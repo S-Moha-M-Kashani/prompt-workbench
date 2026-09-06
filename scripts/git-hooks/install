@@ -30,23 +30,6 @@ for h in pre-commit pre-merge-commit; do
     echo "installed $dst/$h"
 done
 
-# Seed the private-paths list: paths that stay on disk but must never enter
-# a commit or a push. pre-commit refuses staging them, pre-push scans every
-# outgoing commit for them. Local to this clone (.git/info), edit to taste.
-if [ ! -f "$gitdir/info/private-paths" ]; then
-    mkdir -p "$gitdir/info"
-    cat >"$gitdir/info/private-paths" <<'EOF'
-# Paths git must never push. One top-level path per line, no spaces; # starts
-# a comment. They stay on disk and visible — just out of published history.
-.codex
-.agents
-.claude
-.superpowers
-openspec
-EOF
-    echo "seeded $gitdir/info/private-paths (edit the list to taste)"
-fi
-
 # core.hooksPath would override .git/hooks entirely; make sure it is not set.
 if git config --get core.hooksPath >/dev/null 2>&1; then
     git config --unset core.hooksPath

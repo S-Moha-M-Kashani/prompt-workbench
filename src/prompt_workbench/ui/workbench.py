@@ -25,7 +25,7 @@ from prompt_workbench.models.case import CaseBrief, EvalCase
 from prompt_workbench.models.task_type import FineTuneVerdict, TaskType, VariantApproach
 from prompt_workbench.models.usage import TokenUsage
 from prompt_workbench.services import deepeval_metrics, task_catalog, use_case_catalog
-from prompt_workbench.ui import session
+from prompt_workbench.ui import lab, session
 
 NO_KEY = "Add a provider API key in the sidebar to enable this."
 NO_CASE = "Describe the case at the top — a sweep is scored against it."
@@ -45,6 +45,8 @@ def render() -> None:
     _cases(workbench)
     st.divider()
     _variants(workbench)
+    st.divider()
+    lab.render(workbench)
     st.divider()
     _metrics(workbench)
     st.divider()

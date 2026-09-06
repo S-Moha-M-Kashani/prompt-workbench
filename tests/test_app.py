@@ -48,13 +48,19 @@ def _with_credentials(monkeypatch):
 
 
 def _rendered(at) -> str:
-    return " ".join(
+    """Every string the page put on screen, including metric labels."""
+    texts = [
         element.value
         for group in (at.title, at.caption, at.markdown, at.subheader, at.info,
-                      at.warning, at.success)
+                      at.warning, at.success, at.error)
         for element in group
         if isinstance(element.value, str)
-    )
+    ]
+    for tile in at.metric:
+        texts.extend(
+            part for part in (tile.label, tile.value, tile.delta) if isinstance(part, str)
+        )
+    return " ".join(texts)
 
 
 def _run(monkeypatch, *, credentials: bool = False):
@@ -208,9 +214,9 @@ def test_a_different_job_type_brings_different_metrics(monkeypatch):
     if not deepeval_metrics.is_available():
         pytest.skip("needs the deepeval extra")
     at = _run(monkeypatch)
-    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("agentic").run()
+    at = next(b for b in at.selectbox if b.label == "Kind of job").set_value("routing").run()
     purposes = " ".join(caption.value for caption in at.caption)
-    assert deepeval_metrics.get("tool_correctness").purpose in purposes
+    assert deepeval_metrics.get("exact_match").purpose in purposes
     assert deepeval_metrics.get("faithfulness").purpose not in purposes
 
 
@@ -411,3 +417,83 @@ def test_a_sweep_is_offered_once_its_metrics_can_score_the_cases(monkeypatch):
     for key in ("me_exact_match", "me_json_correctness"):
         at = next(box for box in at.checkbox if box.key == key).set_value(False).run()
     assert not _sweep_button(at).disabled
+
+
+# --- the round: the shape, enforced or asked for --------------------------
+
+
+def _lab_shape_on(at):
+    return next(box for box in at.checkbox if box.key == "round_shape_on")
+
+
+def test_the_round_offers_an_optional_answer_shape(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    assert _lab_shape_on(at).value is False
+    assert "nothing is claimed of it" in _rendered(at)
+
+
+def test_switching_the_shape_on_states_which_of_the_two_is_in_force(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    at = _lab_shape_on(at).set_value(True).run()
+    text = _rendered(at)
+    assert "enforce" in text.lower()
+
+
+def test_an_unenforced_shape_names_the_metric_that_would_check_it(monkeypatch):
+    """The wording for the two states must differ, and the weaker one must say
+    what to do about it — otherwise a claim reads as a guarantee."""
+    from prompt_workbench.core import output_structure as shapes
+
+    asked = shapes.enforcement_note(False)
+    assert shapes.SHAPE_METRIC_KEY in asked
+    assert asked != shapes.enforcement_note(True)
+
+
+# --- the model panel and the further parameters ---------------------------
+
+
+def _round_model_picker(at):
+    return next(box for box in at.selectbox if box.key == "round_model_pick")
+
+
+def test_the_round_offers_the_whole_catalogue_not_only_the_shortlist(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    offered = set(_round_model_picker(at).options)
+    from prompt_workbench.services.model_registry import ModelRegistry
+
+    catalogue = {e.id for e in ModelRegistry(fetch=lambda: _snapshot()).selectable()}
+    assert offered == catalogue
+
+
+def _snapshot() -> dict:
+    import json
+
+    from prompt_workbench.services.model_registry import SNAPSHOT_PATH
+
+    return json.loads(SNAPSHOT_PATH.read_text())
+
+
+def test_the_selected_model_shows_what_it_costs_and_what_it_accepts(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    text = _rendered(at)
+    assert "per 1M tokens" in text
+    assert "context" in text.lower()
+    assert "per 1,000 calls" in text
+    assert "tool" in text.lower()
+
+
+def test_the_model_panel_lists_the_parameters_the_model_publishes(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    assert "response_format" in _rendered(at)
+
+
+def test_the_model_panel_says_when_its_information_is_from_the_snapshot(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    assert "stale" in _rendered(at).lower() or "snapshot" in _rendered(at).lower()
+
+
+def test_a_further_parameter_can_be_added_from_the_models_own_list(monkeypatch):
+    at = _run(monkeypatch, credentials=True)
+    picker = next(box for box in at.selectbox if box.key == "extra_param_pick")
+    assert picker.options, "the model publishes parameters beyond the five sliders"
+    assert "temperature" not in picker.options, "already a slider"

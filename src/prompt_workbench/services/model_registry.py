@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import urllib.request
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,12 @@ ASSUMED_TOKENS_IN = 1200
 ASSUMED_TOKENS_OUT = 250
 
 DEFAULT_CONTEXT_WINDOW = 32_000
+
+# The parameters a provider publishes when it can hold a model to a shape, and
+# when it will accept a tool surface. Read from the model's own published list
+# rather than a hand-written capability table, for the same reason the prices are.
+STRUCTURE_PARAMETERS: tuple[str, ...] = ("response_format", "structured_outputs")
+TOOL_PARAMETERS: tuple[str, ...] = ("tools", "tool_choice")
 
 # The curated shortlist, read once from the snapshot.
 _CURATED_IDS: tuple[str, ...] | None = None
@@ -181,6 +187,41 @@ class ModelRegistry:
             tuple(mid for mid in self.curated_ids() if mid in known)
         )
 
+    def selectable(self) -> tuple[ModelEntry, ...]:
+        """The whole catalogue, with the curated shortlist pinned on top.
+
+        The full list is several hundred models deep, and most of them have no
+        place in a comparison — but excluding them is the workbench deciding for
+        the user. So everything is reachable and the curation is an ordering,
+        not a filter.
+        """
+        known = self._load()
+        curated = tuple(
+            known[mid] for mid in self.curated_ids() if mid in known
+        )
+        curated_ids = {entry.id for entry in curated}
+        rest = self.cheapest_first(
+            tuple(mid for mid in known if mid not in curated_ids)
+        )
+        return self.cheapest_first(tuple(e.id for e in curated)) + rest
+
+    def search(self, query: str) -> tuple[ModelEntry, ...]:
+        """Catalogue entries whose identifier or display name contains ``query``.
+
+        Substring rather than fuzzy: someone typing "gpt-5" wants the gpt-5
+        models, and a ranked guess that also returns gpt-4o is a worse answer
+        than a short exact one. An empty query is the whole catalogue.
+        """
+        needle = query.strip().lower()
+        listed = self.selectable()
+        if not needle:
+            return listed
+        return tuple(
+            entry
+            for entry in listed
+            if needle in entry.id.lower() or needle in entry.name.lower()
+        )
+
     def get(self, model_id: str) -> ModelEntry:
         try:
             return self._load()[model_id]
@@ -207,12 +248,86 @@ class ModelRegistry:
         return True if entry is None else entry.supports(setting_name)
 
     def ignored_settings(self, model_id: str, settings: ModelSettings) -> tuple[str, ...]:
-        """Names of knobs set on ``settings`` that ``model_id`` would drop."""
+        """Names of parameters set on ``settings`` that ``model_id`` would drop.
+
+        Covers the five named knobs and everything in the open bag, because a
+        dropped ``seed`` is exactly as silent as a dropped ``temperature``.
+        """
         return tuple(
             name
-            for name in SETTING_NAMES
-            if getattr(settings, name) is not None and not self.supports(model_id, name)
+            for name in settings.parameter_names
+            if not self.supports(model_id, name)
         )
+
+    def can_enforce_structure(self, model_id: str) -> bool:
+        """Whether this model publishes a parameter that holds it to a schema.
+
+        A model that does not is not refused a shape — the shape moves into the
+        system prompt and the interface says it is asked for rather than
+        enforced. Silently dropping it, or claiming it was enforced, are the two
+        ways this number stops being a measurement.
+        """
+        entry = self.find(model_id)
+        if entry is None:
+            return False
+        return any(name in entry.parameters for name in STRUCTURE_PARAMETERS)
+
+    def supports_tools(self, model_id: str) -> bool:
+        """Whether this model publishes a tool-use parameter."""
+        entry = self.find(model_id)
+        if entry is None:
+            return False
+        return any(name in entry.parameters for name in TOOL_PARAMETERS)
+
+    def published_parameters(self, model_id: str) -> tuple[str, ...]:
+        """Every parameter the provider says this model accepts, sorted.
+
+        Empty for a model the catalogue does not know — which ``supports()``
+        already treats permissively, so nothing is offered rather than
+        everything being claimed.
+        """
+        entry = self.find(model_id)
+        return () if entry is None else tuple(sorted(entry.parameters))
+
+    def addable_parameters(self, model_id: str, settings: ModelSettings) -> tuple[str, ...]:
+        """Published parameters not already shown as a control or set in the bag."""
+        shown = set(SETTING_NAMES) | set(settings.extra)
+        return tuple(
+            name for name in self.published_parameters(model_id) if name not in shown
+        )
+
+    def with_parameter(
+        self, model_id: str, settings: ModelSettings, name: str, value: Any
+    ) -> ModelSettings:
+        """``settings`` plus one more published parameter, or a refusal.
+
+        Refusing rather than dropping quietly: the user asked for this key by
+        name, and a parameter that vanishes between the control and the request
+        is how a measurement ends up describing a call nobody made.
+        """
+        if not self.supports(model_id, name):
+            raise ValueError(f"{model_id} does not publish the parameter {name!r}.")
+        return replace(settings, extra={**settings.extra, name: value})
+
+    def without_parameter(self, settings: ModelSettings, name: str) -> ModelSettings:
+        """``settings`` with one bag entry removed."""
+        return replace(
+            settings, extra={k: v for k, v in settings.extra.items() if k != name}
+        )
+
+    def strip_unsupported(
+        self, model_id: str, settings: ModelSettings
+    ) -> tuple[ModelSettings, tuple[str, ...]]:
+        """``settings`` narrowed to what ``model_id`` publishes, and what was dropped."""
+        dropped = self.ignored_settings(model_id, settings)
+        if not dropped:
+            return settings, ()
+        named = {
+            name: (None if name in dropped else getattr(settings, name))
+            for name in SETTING_NAMES
+        }
+        kept_extra = {k: v for k, v in settings.extra.items() if k not in dropped}
+        return replace(settings, extra=kept_extra, **named), dropped
 
     def context_window(self, model_id: str) -> int:
         entry = self.find(model_id)

@@ -61,3 +61,14 @@ module = [
     "anthropic.*",
 ]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The live tests spend real money against a real provider. They guard
+# themselves with PROMPT_WORKBENCH_LIVE, so a plain `uv run pytest` collects
+# them and skips every one. They are skipped rather than deselected so an
+# editor's test list still shows them — all named `test_live_*`:
+#     PROMPT_WORKBENCH_LIVE=1 uv run pytest -m live
+markers = [
+    "live: makes a real provider call. Costs money. Skipped unless PROMPT_WORKBENCH_LIVE=1.",
+]

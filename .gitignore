@@ -27,8 +27,9 @@ wheels/
 .codex/
 .superpowers/
 
-# Internal docs — everything except README stays local
-docs/
+# Internal docs — everything except README and the limits stays local
+docs/*
+!docs/LIMITATIONS.md
 openspec/
 CLAUDE.md
 AGENTS.md

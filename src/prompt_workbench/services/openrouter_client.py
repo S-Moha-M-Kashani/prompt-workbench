@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from typing import Any
 
 from dotenv import dotenv_values
@@ -23,7 +23,7 @@ from openai import OpenAI
 
 from prompt_workbench.models import ModelSettings
 from prompt_workbench.models.protocols import Message
-from prompt_workbench.services import model_catalog
+from prompt_workbench.models.usage import TokenUsage
 
 API_KEY_ENV = "PROVIDER_API_KEY"
 BASE_URL_ENV = "PROVIDER_BASE_URL"
@@ -86,25 +86,23 @@ def build_client(config: ProviderConfig) -> OpenAI:
 def _create_params(
     model: str | None, messages: list[Message], settings: ModelSettings | None
 ) -> dict[str, Any]:
-    """Build kwargs for ``create``; send only set fields the model honours.
+    """Build kwargs for ``create``; send only the fields that were set.
 
     ``ModelSettings`` field names match the provider parameters, so a ``None``
-    field is simply omitted and the model keeps its own default. Fields the
-    catalog says ``model`` ignores are dropped too, so the request only ever
-    asks for what will actually take effect.
+    field is simply omitted and the model keeps its own default.
+
+    Capability filtering happens upstream, not here. ``model_registry`` holds
+    the provider's own statement of what each model accepts and the interface
+    only ever stores settings a model honours, so a second filter in this module
+    would be a second source of truth — and the one most likely to go stale,
+    since it is the one nobody looks at.
     """
     if not model:
         raise ValueError("No model selected for this call")
 
     params: dict[str, Any] = {"model": model, "messages": messages}
     if settings is not None:
-        params.update(
-            {
-                k: v
-                for k, v in asdict(settings).items()
-                if v is not None and model_catalog.supports(model, k)
-            }
-        )
+        params.update(settings.as_params())
     return params
 
 
@@ -159,14 +157,17 @@ def chat_completion_with_usage(
     client: OpenAI,
     model: str | None = None,
     settings: ModelSettings | None = None,
-) -> tuple[str, int]:
-    """Like ``chat_completion`` but also return the total token count.
+) -> tuple[str, TokenUsage]:
+    """Like ``chat_completion``, and also what the call cost.
 
-    Returns ``(text, total_tokens)``; ``total_tokens`` is 0 when the provider
-    does not report usage.
+    Returns ``(text, usage)``. A provider that reports no usage yields zeros
+    rather than raising: the response is still the thing being examined, and
+    losing it over a missing counter would be the wrong trade.
     """
     response = client.chat.completions.create(**_create_params(model, messages, settings))
     text = response.choices[0].message.content or ""
-    usage = getattr(response, "usage", None)
-    total_tokens = getattr(usage, "total_tokens", 0) or 0
-    return text, total_tokens
+    reported = getattr(response, "usage", None)
+    return text, TokenUsage(
+        tokens_in=int(getattr(reported, "prompt_tokens", 0) or 0),
+        tokens_out=int(getattr(reported, "completion_tokens", 0) or 0),
+    )

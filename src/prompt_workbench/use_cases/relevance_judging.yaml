@@ -1,0 +1,49 @@
+key: relevance_judging
+task_type: judging
+label: Judging which retrieved chunks are relevant
+family: grounding
+origin: a memory system that judges its own retrieval hits before answering
+situation: |
+  A retrieval step has returned candidate chunks from past conversations. Your
+  prompt decides, for each one, whether it genuinely helps answer the question
+  in front of you. Whatever you pass goes into the answering model's context.
+
+  Some of these candidates share vocabulary with the question but answer a
+  different question entirely.
+trap: |
+  Waving everything through. Keyword overlap reads as relevance, and a judge
+  that says yes to all five has done nothing except add cost. The opposite
+  failure matters too: dropping a candidate id from the output entirely, so the
+  caller cannot tell a rejection from an omission.
+example_message: |
+  The learner asks: "How do I ask for the bill politely in a restaurant?"
+criteria:
+  - returns a verdict for every candidate id, exactly once each
+  - marks the genuinely relevant candidates as relevant
+  - rejects candidates that only share vocabulary with the question
+  - returns valid JSON in the requested shape
+forbidden:
+  - omits a candidate id from the output
+  - marks every candidate relevant
+mocks:
+  - name: candidates
+    label: Retrieved chunks
+    note: two relevant, three vocabulary-overlap distractors
+    content: |
+      [id=101] Learner practised ordering food and asked how to say "the bill" in English.
+      [id=102] Learner asked about paying bills at home — electricity, internet, direct debit.
+      [id=103] Learner was taught "could I have..." as a softer form than "give me".
+      [id=104] Learner discussed a restaurant they visited in Tehran and the food they liked.
+      [id=105] Learner asked how to pronounce "receipt" and why the p is silent.
+system_prompt: |
+  You are a relevance judge for a memory retrieval system. Given the learner's
+  QUESTION and a list of CANDIDATE memory chunks from past conversations,
+  decide for each whether it genuinely helps answer this question.
+
+  Return ONLY valid JSON:
+  {"verdicts": [{"id": <chunk id>, "relevant": true/false, "reason": "<one short sentence>"}]}
+
+  Include every candidate id exactly once.
+
+  CANDIDATES:
+  {candidates}

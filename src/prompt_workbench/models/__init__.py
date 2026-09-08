@@ -1,55 +1,56 @@
-"""Central typed data: artifacts, snapshots, settings, and port contracts.
+"""Central typed data: use cases, runs, metrics, settings, and port contracts.
 
-The re-exported types below form a dependency-free leaf — they import nothing
-from ``core``/``services``/``app`` — so callers can write
-``from prompt_workbench.models import ModelSettings`` regardless of file layout.
-Behavioural classes live in ``core`` or ``services``, not here.
+A dependency-free leaf — nothing here imports from ``core``, ``services`` or the
+UI — so a caller can write ``from prompt_workbench.models import UseCase``
+regardless of file layout. Behavioural classes live in ``core`` or ``services``.
 """
 
-from prompt_workbench.models.brief import BRIEF_FIELDS, BriefSnapshot, PromptBrief
-from prompt_workbench.models.candidates import CandidatePrompt, PromptTechnique
-from prompt_workbench.models.chat import ChatMessage, ChatThread, ThreadConfig
+from prompt_workbench.models.call import (
+    CallRequest,
+    CallResult,
+    OutputStructure,
+    ToolInvocation,
+    ToolSpec,
+)
+from prompt_workbench.models.chat import ChatMessage, ChatThread
 from prompt_workbench.models.evaluation import (
     CaseEvaluation,
+    EvaluationEvidence,
     EvaluationRun,
     Grade,
     MetricScore,
 )
-from prompt_workbench.models.execution import ExecutionRecord
-from prompt_workbench.models.ground_truth import (
-    CaseCategory,
-    GroundTruthCase,
-    GroundTruthDataset,
-)
+from prompt_workbench.models.ground_truth import CaseCategory, GroundTruthCase
 from prompt_workbench.models.identifiers import IdFactory, random_id, sequential_ids
 from prompt_workbench.models.metrics import MetricDefinition, MetricKind
-from prompt_workbench.models.model_info import ModelInfo
 from prompt_workbench.models.model_settings import ModelSettings
-from prompt_workbench.models.provenance import SourceRef
+from prompt_workbench.models.runs import PromptRun
+from prompt_workbench.models.usage import TokenUsage
+from prompt_workbench.models.use_case import MockBlock, UseCase
 
 __all__ = [
-    "BRIEF_FIELDS",
-    "BriefSnapshot",
-    "CandidatePrompt",
+    "CallRequest",
+    "CallResult",
     "CaseCategory",
     "CaseEvaluation",
     "ChatMessage",
     "ChatThread",
+    "EvaluationEvidence",
     "EvaluationRun",
-    "ExecutionRecord",
     "Grade",
     "GroundTruthCase",
-    "GroundTruthDataset",
     "IdFactory",
     "MetricDefinition",
     "MetricKind",
     "MetricScore",
-    "ModelInfo",
+    "MockBlock",
     "ModelSettings",
-    "PromptBrief",
-    "PromptTechnique",
-    "SourceRef",
-    "ThreadConfig",
+    "OutputStructure",
+    "PromptRun",
+    "TokenUsage",
+    "ToolInvocation",
+    "ToolSpec",
+    "UseCase",
     "random_id",
     "sequential_ids",
 ]

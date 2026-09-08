@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from prompt_workbench.models import ModelSettings
+from prompt_workbench.models import ModelSettings, TokenUsage
 from prompt_workbench.services import openrouter_client
 from prompt_workbench.services.openrouter_client import ProviderConfig
 
@@ -16,10 +16,12 @@ _SAMPLING_IGNORING_MODEL = "openai/gpt-5-mini"
 class FakeCompletions:
     """Records the kwargs it was called with and returns a canned reply."""
 
-    def __init__(self, text: str = "ok", total_tokens: int | None = 42, chunks=None):
+    def __init__(self, text: str = "ok", tokens_in: int | None = 30, tokens_out: int = 12,
+                 chunks=None):
         self.calls: list[dict] = []
         self._text = text
-        self._total_tokens = total_tokens
+        self._tokens_in = tokens_in
+        self._tokens_out = tokens_out
         self._chunks = chunks
 
     def create(self, **kwargs):
@@ -30,7 +32,13 @@ class FakeCompletions:
                 for c in (self._chunks or [])
             )
         usage = (
-            None if self._total_tokens is None else SimpleNamespace(total_tokens=self._total_tokens)
+            None
+            if self._tokens_in is None
+            else SimpleNamespace(
+                prompt_tokens=self._tokens_in,
+                completion_tokens=self._tokens_out,
+                total_tokens=self._tokens_in + self._tokens_out,
+            )
         )
         return SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(content=self._text))],
@@ -145,8 +153,10 @@ def test_unset_settings_are_not_sent():
     assert "top_p" not in sent
 
 
-def test_settings_the_model_ignores_are_dropped():
-    """Asking for a knob the model discards would only invite false conclusions."""
+def test_the_client_sends_what_it_is_given_without_a_second_opinion():
+    """Capability filtering belongs to `model_registry` and the interface above
+    it. A duplicate table here was a second source of truth, and the one that
+    went stale, since a request is not something anyone reads."""
     client = fake_client()
 
     openrouter_client.chat_completion(
@@ -157,7 +167,8 @@ def test_settings_the_model_ignores_are_dropped():
     )
 
     sent = client.completions.calls[0]
-    assert "temperature" not in sent
+    assert sent["temperature"] == 0.9
+    assert sent["max_tokens"] == 128
     assert sent["max_tokens"] == 128
 
 
@@ -186,20 +197,22 @@ def test_missing_content_becomes_an_empty_string():
     )
 
 
-def test_chat_completion_with_usage_reports_total_tokens():
-    client = fake_client(text="hi", total_tokens=17)
+def test_chat_completion_with_usage_reports_both_directions():
+    """In and out are kept apart: a longer prompt and a longer answer are
+    different problems, and a single total hides which one moved."""
+    client = fake_client(text="hi", tokens_in=120, tokens_out=30)
 
     assert openrouter_client.chat_completion_with_usage(
         [{"role": "user", "content": "hi"}], client=client, model=_TUNABLE_MODEL
-    ) == ("hi", 17)
+    ) == ("hi", TokenUsage(tokens_in=120, tokens_out=30))
 
 
 def test_chat_completion_with_usage_defaults_to_zero_tokens():
-    client = fake_client(text="hi", total_tokens=None)
+    client = fake_client(text="hi", tokens_in=None)
 
     assert openrouter_client.chat_completion_with_usage(
         [{"role": "user", "content": "hi"}], client=client, model=_TUNABLE_MODEL
-    ) == ("hi", 0)
+    ) == ("hi", TokenUsage())
 
 
 def test_stream_yields_only_non_empty_chunks():

@@ -5,17 +5,15 @@ cannot: the third message only makes sense after the first two. So history is
 confined to this one shape, keyed by thread, and no generator or evaluator is
 ever handed one.
 
-``ThreadConfig`` is what a testing thread was opened with. It compares by value,
-which is how "you changed the model halfway through" becomes detectable rather
-than a mystery in the transcript.
+Only the prompt-engineer conversation uses one. The one-shot runner keeps no
+history at all, which is what makes its output evidence about the prompt rather
+than about the conversation.
 """
 
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from prompt_workbench.models.model_settings import ModelSettings
 from prompt_workbench.models.protocols import Message
-from prompt_workbench.models.provenance import SourceRef
 
 ROLES = ("system", "user", "assistant")
 
@@ -34,22 +32,12 @@ class ChatMessage:
 
 
 @dataclass(frozen=True)
-class ThreadConfig:
-    """The candidate, model, and settings a testing thread is pinned to."""
-
-    candidate: SourceRef
-    model_id: str
-    settings: ModelSettings
-
-
-@dataclass(frozen=True)
 class ChatThread:
     """One isolated conversation with its complete short-term history."""
 
     id: str
     purpose: str
     created_at: datetime
-    config: ThreadConfig | None = None
     messages: tuple[ChatMessage, ...] = ()
 
     def appended(self, message: ChatMessage) -> "ChatThread":

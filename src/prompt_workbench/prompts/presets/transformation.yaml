@@ -1,0 +1,32 @@
+label: Transformation / rewriting
+note: >
+  Rewriting fails by quietly changing meaning, so the preserve list matters more
+  than the style instruction. Name what must survive, then what may change.
+temperature: 0.2
+approach_labels:
+  - Preserve list
+  - Before and after
+  - One change only
+  - Forbidden edits
+system_prompt: |
+  You rewrite text without changing what it means.
+
+  Must survive unchanged:
+  - every number, date, name, code and quantity
+  - the direction of every statement (a negation stays a negation)
+  - any explicit condition or exception
+
+  May change:
+  - sentence length, ordering within a paragraph, vocabulary, register
+
+  Rules:
+  - Make no claim the source does not make, and drop no claim it does.
+  - Return the rewritten text alone, with no commentary on what you changed.
+user_prompt: |
+  Rewrite the following in plain language for a non-specialist reader:
+
+  [paste the text here]
+metrics:
+  faithfulness: 0.9
+  prompt_alignment: 0.9
+  g_eval_criteria: 0.8

@@ -1,456 +1,227 @@
-"""The whole workflow, offline, with fake providers.
+"""The whole page, walked, with every model call mocked.
 
-One test walks brief → confirmation → dataset → candidates → manual run →
-custom metric → explicit evaluation, and the rest cover what happens when
-something upstream changes underneath an artifact that was already built.
+These are the tests the unit suite cannot be: each one starts at a blank page,
+types a case into it, and stops when the sweep has named a configuration. What
+they cover is the wiring — that the description reaches the task type, that the
+task type reaches the metrics, that the variant's prompt and the case's input
+are the two halves of every request, and that a result names the framework that
+produced it.
 
-No provider or CLI is reached. Every model call is a function defined here, so a
-failure in this file is a failure in the workbench, never in someone's network.
+No model is ever called. One scripted adapter stands in per framework and
+records what it was asked for, which is also how these tests assert on the
+request rather than only on the screen.
+
+The metric is deliberately ``exact_match``: it is the only one that calls no
+model at all, so a walk that ends in a green result ends there because the
+plumbing worked, not because a judge was in a good mood.
 """
 
-import json
-from datetime import UTC, datetime
+from __future__ import annotations
+
+from typing import Any
 
 import pytest
 
-from prompt_workbench.core import (
-    candidate_generation,
-    dataset_generation,
-    discovery,
-    evaluation,
-    testing,
-)
-from prompt_workbench.core.chat_memory import ThreadStore
-from prompt_workbench.core.evaluation import EvaluationBlocked
-from prompt_workbench.core.workspace import Workspace
-from prompt_workbench.models import (
-    ModelSettings,
-    PromptBrief,
-    PromptTechnique,
-    sequential_ids,
+from prompt_workbench.services import deepeval_metrics
+from tests_support_app import ScriptedRunner, rendered, start
+
+pytestmark = pytest.mark.skipif(
+    not deepeval_metrics.is_available(),
+    reason="the sweep is gated on the deepeval extra",
 )
 
-WHEN = datetime(2026, 3, 1, tzinfo=UTC)
-PLATFORM = "You are a prompt engineer."
-MODEL = "openai/gpt-4o-mini"
+DESCRIPTION = "Sort incoming support tickets into one of six queues."
+CASE_INPUT = "I was charged twice this month."
+EXPECTED = "billing"
+VARIANT = "You are a classifier. Answer with the queue name only."
+
+# The one metric that reaches no model, so a walk is deterministic end to end.
+KEPT_METRIC = "exact_match"
 
 
-def a_workspace() -> tuple[Workspace, ThreadStore]:
-    ids = sequential_ids()
-    return Workspace(new_id=ids, clock=lambda: WHEN), ThreadStore(
-        new_id=ids, clock=lambda: WHEN
+# --- driving the page -----------------------------------------------------
+
+
+def _widget(at: Any, group: str, key: str) -> Any:
+    for element in getattr(at, group):
+        if element.key == key:
+            return element
+    raise AssertionError(f"no {group} with key {key!r} on the page")
+
+
+def _button(at: Any, label: str) -> Any:
+    for button in at.button:
+        if button.label == label:
+            return button
+    raise AssertionError(f"no button labelled {label!r} on the page")
+
+
+def _only_metric(at: Any, keep: str) -> Any:
+    """Leave one metric enabled, so the score means one thing."""
+    for box in [b for b in at.checkbox if b.key and b.key.startswith("me_")]:
+        wanted = box.key == f"me_{keep}"
+        if box.value != wanted:
+            at = _widget(at, "checkbox", box.key).set_value(wanted).run()
+    return at
+
+
+def walk_to_the_sweep(
+    monkeypatch,
+    *,
+    expected: str = EXPECTED,
+    keep_metric: str = KEPT_METRIC,
+    **runners: ScriptedRunner,
+) -> Any:
+    """From a blank page to one case, one variant and one metric."""
+    at = start(monkeypatch, **runners)
+    at = _widget(at, "text_area", "case_description").set_value(DESCRIPTION).run()
+    at = _widget(at, "selectbox", "task_type_pick").set_value("classification").run()
+
+    _widget(at, "text_area", "new_case_input").set_value(CASE_INPUT)
+    _widget(at, "text_input", "new_case_expected").set_value(expected)
+    at = at.run()
+    at = _button(at, "Add this case").click().run()
+
+    _widget(at, "text_area", "new_variant_prompt").set_value(VARIANT)
+    at = at.run()
+    at = _button(at, "Add this prompt").click().run()
+
+    return _only_metric(at, keep_metric)
+
+
+def run_the_sweep(at: Any) -> Any:
+    button = _button(at, "Run the sweep")
+    assert not button.disabled, f"the sweep was refused: {button.help}"
+    return button.click().run()
+
+
+# --- a case that passes ---------------------------------------------------
+
+
+def test_a_described_case_walks_all_the_way_to_a_named_configuration(monkeypatch):
+    """The whole point of the page, in one test: describe a job, and be told
+    which framework, prompt and model to ship."""
+    runner = ScriptedRunner("openai", answer=EXPECTED)
+    at = run_the_sweep(walk_to_the_sweep(monkeypatch, openai=runner))
+
+    assert not at.exception
+    text = rendered(at)
+    assert "Cheapest configuration that passed" in text
+    assert "via `openai`" in text
+
+
+def test_the_configuration_is_shown_as_code_to_carry_into_another_project(monkeypatch):
+    """Nothing is written to disk, so the deliverable is code on screen."""
+    at = run_the_sweep(walk_to_the_sweep(monkeypatch, openai=ScriptedRunner("openai")))
+    code = " ".join(block.value for block in at.code)
+    assert "# framework: openai" in code
+    assert "ExactMatchMetric" in code
+
+
+# --- what the round actually sent -----------------------------------------
+
+
+def test_every_request_pairs_the_variants_prompt_with_the_cases_input(monkeypatch):
+    """The sweep substitutes exactly two things per cell. If it substituted the
+    round's own prompts instead, every cell would measure the same call."""
+    runner = ScriptedRunner("openai")
+    run_the_sweep(walk_to_the_sweep(monkeypatch, openai=runner))
+
+    assert runner.requests
+    for request in runner.requests:
+        assert request.system_prompt == VARIANT
+        assert request.user_prompt == CASE_INPUT
+
+
+def test_one_request_is_made_per_framework_variant_model_and_case(monkeypatch):
+    """The count is the sweep's contract, and the number the estimate is built
+    on. A cell that quietly ran twice would double a bill nobody approved."""
+    runner = ScriptedRunner("openai")
+    at = run_the_sweep(walk_to_the_sweep(monkeypatch, openai=runner))
+
+    models = next(box for box in at.multiselect if box.label == "Models to try")
+    assert len(runner.requests) == len(models.value)  # one variant, one case
+
+
+def test_a_tool_surface_is_carried_into_every_call_the_sweep_makes(monkeypatch):
+    """Tools are a property of the round, so they belong to every cell of the
+    sweep — not only to the single round run in the lab."""
+    at = walk_to_the_sweep(monkeypatch, openai=(runner := ScriptedRunner("openai")))
+    at = _widget(at, "checkbox", "round_tools_on").set_value(True).run()
+    _widget(at, "text_input", "tool_name_0").set_value("lookup_customer")
+    at = at.run()
+
+    assert "2 model calls" in rendered(at) or "2 model calls rather than one" in rendered(at)
+    run_the_sweep(at)
+    assert runner.requests
+    for request in runner.requests:
+        assert request.tool_names == ("lookup_customer",)
+
+
+# --- a case that does not pass --------------------------------------------
+
+
+def test_a_wrong_answer_clears_nothing_and_the_page_says_so(monkeypatch):
+    """A sweep that found no answer must say so, not pick a least-bad winner."""
+    runner = ScriptedRunner("openai", answer="shipping")
+    at = run_the_sweep(walk_to_the_sweep(monkeypatch, openai=runner))
+
+    text = rendered(at)
+    assert "Nothing cleared every threshold" in text
+    assert "Cheapest configuration that passed" not in text
+
+
+def test_one_model_failing_does_not_cost_the_user_the_rest_of_the_sweep(monkeypatch):
+    """The other cells have already been paid for by the time one breaks."""
+    runner = ScriptedRunner("openai")
+    at = walk_to_the_sweep(monkeypatch, openai=runner)
+    models = next(box for box in at.multiselect if box.label == "Models to try")
+    assert len(models.value) > 1, "this test needs a second model to survive the first"
+    runner.fail_on(models.value[0])
+
+    at = run_the_sweep(at)
+    text = rendered(at)
+    assert "the provider refused" in text
+    assert "Cheapest configuration that passed" in text
+
+
+# --- results describe something that still exists -------------------------
+
+
+def test_changing_a_metric_after_a_sweep_discards_the_result(monkeypatch):
+    """A score is a statement about one exact configuration. Leaving it on
+    screen after the configuration moved is how a stale number gets shipped."""
+    at = run_the_sweep(walk_to_the_sweep(monkeypatch, openai=ScriptedRunner("openai")))
+    assert "Cheapest configuration that passed" in rendered(at)
+
+    at = _widget(at, "checkbox", f"me_{KEPT_METRIC}").set_value(False).run()
+    assert "Cheapest configuration that passed" not in rendered(at)
+
+
+def test_two_frameworks_are_measured_apart_and_each_result_names_its_own(monkeypatch):
+    """The framework is part of the configuration, not a detail of how it ran.
+    Two frameworks over one variant and one model are two answers to "what
+    should we ship", and a result that did not name its own would be
+    unreproducible."""
+    from prompt_workbench.llm_call import registry as frameworks
+
+    second = next(
+        (
+            key
+            for key in frameworks.available_keys()
+            if key != "openai" and not frameworks.get(key).reaches_own_provider
+        ),
+        None,
     )
+    if second is None:
+        pytest.skip("no second framework extra is installed")
 
+    runners = {"openai": ScriptedRunner("openai"), second: ScriptedRunner(second)}
+    at = walk_to_the_sweep(monkeypatch, **runners)
+    at = _widget(at, "multiselect", "round_frameworks").set_value(["openai", second]).run()
+    at = run_the_sweep(at)
 
-DISCOVERY_REPLY = json.dumps(
-    {
-        "reply": "Who reads the summaries?",
-        "brief": {
-            "purpose": "Summarize incoming support tickets",
-            "audience": "Team leads",
-            "inputs": "The raw ticket text",
-            "desired_behaviour": "State the problem and what the customer wants",
-            "constraints": "Never invent order details",
-            "output_format": "JSON with a summary field",
-            "examples": "A late delivery ticket",
-            "failure_cases": "Inventing a refund policy",
-        },
-        "ready": True,
-    }
-)
-
-DATASET_REPLY = json.dumps(
-    {
-        "cases": [
-            {
-                "test_message": "Where is my order?",
-                "required_criteria": ["names the missing order"],
-                "forbidden_behaviours": ["promises a refund"],
-                "tags": ["delivery"],
-                "reference_answer": None,
-                "category": "normal",
-            },
-            {
-                "test_message": "!!!",
-                "required_criteria": ["asks for more detail"],
-                "forbidden_behaviours": ["guesses the problem"],
-                "tags": ["edge"],
-                "reference_answer": None,
-                "category": "edge",
-            },
-        ]
-    }
-)
-
-
-def scripted(*replies: str):  # type: ignore[no-untyped-def]
-    """A completion that returns each scripted reply in turn."""
-    queue = list(replies)
-
-    def complete(messages, *, model=None, settings=None, response_format=None):  # type: ignore[no-untyped-def]
-        return queue.pop(0) if queue else replies[-1]
-
-    return complete
-
-
-def judge_scoring(value: float):  # type: ignore[no-untyped-def]
-    def judge(messages: list[dict[str, str]]) -> str:
-        return json.dumps({"score": value, "reason": "as scored by the fake judge"})
-
-    return judge
-
-
-def test_the_whole_workflow_runs_offline_from_brief_to_grade() -> None:
-    workspace, store = a_workspace()
-
-    # 1. Discovery fills the brief in, and the user confirms it.
-    thread_id = store.open("discovery")
-    result = discovery.clarify(
-        store=store,
-        thread_id=thread_id,
-        user_message="I need to summarize support tickets",
-        brief=PromptBrief(),
-        platform_instruction=PLATFORM,
-        complete=scripted(DISCOVERY_REPLY),
-        model=MODEL,
-        settings=ModelSettings(),
-    )
-    assert result.ready
-    workspace.update_draft(result.brief)
-    brief = workspace.confirm_brief()
-    assert brief.revision == 1
-
-    # 2. Ground truth comes from the confirmed snapshot only.
-    workspace.set_dataset(
-        dataset_generation.generate(
-            brief=brief,
-            count=2,
-            platform_instruction=PLATFORM,
-            complete=scripted(DATASET_REPLY),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    assert workspace.dataset is not None and len(workspace.dataset) == 2
-
-    # 3. Candidates: one per technique, few-shot fed by the visible dataset.
-    workspace.set_candidates(
-        candidate_generation.generate(
-            brief=brief,
-            dataset=workspace.dataset,
-            techniques=(PromptTechnique.DIRECT, PromptTechnique.FEW_SHOT),
-            platform_instruction=PLATFORM,
-            complete=scripted("You are a ticket summarizer."),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    assert len(workspace.candidates) == 2
-
-    # 4. The user edits one candidate by hand; only that one changes.
-    candidate = workspace.candidates[0]
-    workspace.edit_candidate(candidate.id, "You are a careful ticket summarizer.")
-    assert workspace.candidate(candidate.id).revision == 2
-    assert workspace.candidates[1].revision == 1
-
-    # 5. A manual run against a real test case, in its own pinned thread.
-    candidate = workspace.candidate(candidate.id)
-    case = workspace.dataset.cases[0]
-    test_thread = testing.open_test_thread(
-        store, candidate=candidate, model=MODEL, settings=ModelSettings()
-    )
-    record = testing.send_test_message(
-        store=store,
-        thread_id=test_thread,
-        candidate=candidate,
-        brief=brief,
-        case=case,
-        user_message=case.test_message,
-        model=MODEL,
-        settings=ModelSettings(),
-        complete=scripted('{"summary": "The order has not arrived."}'),
-        new_id=workspace.new_id,
-        clock=workspace.clock,
-    )
-    workspace.record_execution(record)
-    assert record.is_attributable
-
-    # 6. A custom metric joins the built-in ones.
-    workspace.add_metric(
-        name="Brevity", rubric="Score how concise the summary is for a busy reader."
-    )
-
-    # 7. Nothing has been scored yet — evaluation only happens when asked for.
-    assert workspace.evaluations == ()
-
-    run = evaluation.run(
-        executions=workspace.executions,
-        dataset=workspace.dataset,
-        brief=brief,
-        candidate=candidate,
-        metrics=workspace.metrics,
-        judge=judge_scoring(0.8),
-        judge_backend="codex",
-        judge_model="gpt-5.6-luna",
-        new_id=workspace.new_id,
-        clock=workspace.clock,
-    )
-    workspace.record_evaluation(run)
-
-    # 8. The grade is reproducible by hand from what is on screen.
-    #
-    # Four metrics were enabled. The fake judge scored 0.8 for each of the three
-    # rubric metrics it was asked about; format compliance needed no judge at all
-    # and scored 1.0, because the brief asks for JSON and the response is JSON.
-    # Reference similarity was skipped — this case has no reference answer — and
-    # is excluded from the mean rather than counted as zero.
-    #   (0.8 + 0.8 + 0.8 + 1.0) / 4 == 0.85
-    scores = {s.metric_name: s for s in run.cases[0].scores}
-    assert scores["Format compliance"].score == 1.0
-    assert scores["Reference similarity"].applicable is False
-    assert scores["Reference similarity"].score is None
-    assert run.overall.percentage == 85.0
-    assert run.overall.letter == "A"
-    assert run.candidate == candidate.ref
-    assert run.source_brief == brief.ref
-    assert run.source_dataset == workspace.dataset.ref
-
-
-def test_editing_the_brief_marks_the_downstream_artifacts_stale() -> None:
-    workspace, _ = a_workspace()
-    workspace.update_draft(PromptBrief(purpose="first"))
-    brief = workspace.confirm_brief()
-    workspace.set_dataset(
-        dataset_generation.generate(
-            brief=brief,
-            count=2,
-            platform_instruction=PLATFORM,
-            complete=scripted(DATASET_REPLY),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    assert workspace.stale_artifacts() == ()
-
-    workspace.update_draft(PromptBrief(purpose="completely different"))
-    workspace.confirm_brief()
-
-    stale = workspace.stale_artifacts()
-    assert stale, "an artifact built from an older brief revision must be flagged"
-    # Nothing was deleted to make the point.
-    assert workspace.dataset is not None and len(workspace.dataset) == 2
-
-
-def test_removing_a_case_blocks_evaluation_of_a_response_that_used_it() -> None:
-    workspace, store = a_workspace()
-    workspace.update_draft(PromptBrief(purpose="x"))
-    brief = workspace.confirm_brief()
-    workspace.set_dataset(
-        dataset_generation.generate(
-            brief=brief,
-            count=2,
-            platform_instruction=PLATFORM,
-            complete=scripted(DATASET_REPLY),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    workspace.set_candidates(
-        candidate_generation.generate(
-            brief=brief,
-            dataset=workspace.dataset,
-            techniques=(PromptTechnique.DIRECT,),
-            platform_instruction=PLATFORM,
-            complete=scripted("You are a summarizer."),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    candidate = workspace.candidates[0]
-    case = workspace.dataset.cases[0]  # type: ignore[union-attr]
-    thread = testing.open_test_thread(
-        store, candidate=candidate, model=MODEL, settings=ModelSettings()
-    )
-    workspace.record_execution(
-        testing.send_test_message(
-            store=store,
-            thread_id=thread,
-            candidate=candidate,
-            brief=brief,
-            case=case,
-            user_message=case.test_message,
-            model=MODEL,
-            settings=ModelSettings(),
-            complete=scripted("a reply"),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    workspace.remove_case(case.id)
-
-    with pytest.raises(EvaluationBlocked, match="no longer in the dataset"):
-        evaluation.run(
-            executions=workspace.executions,
-            dataset=workspace.dataset,  # type: ignore[arg-type]
-            brief=brief,
-            candidate=candidate,
-            metrics=workspace.metrics,
-            judge=judge_scoring(1.0),
-            judge_backend="codex",
-            judge_model="m",
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-
-
-def test_a_provider_failure_mid_workflow_destroys_nothing() -> None:
-    workspace, _ = a_workspace()
-    workspace.update_draft(PromptBrief(purpose="keep me"))
-    brief = workspace.confirm_brief()
-    workspace.set_dataset(
-        dataset_generation.generate(
-            brief=brief,
-            count=2,
-            platform_instruction=PLATFORM,
-            complete=scripted(DATASET_REPLY),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-
-    def failing(messages, *, model=None, settings=None, response_format=None):  # type: ignore[no-untyped-def]
-        raise RuntimeError("provider is unreachable")
-
-    with pytest.raises(RuntimeError):
-        candidate_generation.generate(
-            brief=brief,
-            dataset=workspace.dataset,
-            techniques=(PromptTechnique.DIRECT,),
-            platform_instruction=PLATFORM,
-            complete=failing,
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-
-    assert workspace.confirmed_brief == brief
-    assert workspace.dataset is not None and len(workspace.dataset) == 2
-    assert workspace.candidates == ()
-
-
-def test_a_partial_judge_failure_still_produces_a_grade_and_shows_the_gap() -> None:
-    workspace, store = a_workspace()
-    workspace.update_draft(PromptBrief(purpose="x"))
-    brief = workspace.confirm_brief()
-    workspace.set_dataset(
-        dataset_generation.generate(
-            brief=brief,
-            count=2,
-            platform_instruction=PLATFORM,
-            complete=scripted(DATASET_REPLY),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    workspace.set_candidates(
-        candidate_generation.generate(
-            brief=brief,
-            dataset=workspace.dataset,
-            techniques=(PromptTechnique.DIRECT,),
-            platform_instruction=PLATFORM,
-            complete=scripted("You are a summarizer."),
-            model=MODEL,
-            settings=ModelSettings(),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-    candidate = workspace.candidates[0]
-    case = workspace.dataset.cases[0]  # type: ignore[union-attr]
-    thread = testing.open_test_thread(
-        store, candidate=candidate, model=MODEL, settings=ModelSettings()
-    )
-    workspace.record_execution(
-        testing.send_test_message(
-            store=store,
-            thread_id=thread,
-            candidate=candidate,
-            brief=brief,
-            case=case,
-            user_message=case.test_message,
-            model=MODEL,
-            settings=ModelSettings(),
-            complete=scripted("a reply"),
-            new_id=workspace.new_id,
-            clock=workspace.clock,
-        )
-    )
-
-    calls = {"n": 0}
-
-    def flaky(messages: list[dict[str, str]]) -> str:
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise RuntimeError("codex did not answer within 600s")
-        return json.dumps({"score": 1.0, "reason": "fine"})
-
-    run = evaluation.run(
-        executions=workspace.executions,
-        dataset=workspace.dataset,  # type: ignore[arg-type]
-        brief=brief,
-        candidate=candidate,
-        metrics=workspace.metrics,
-        judge=flaky,
-        judge_backend="codex",
-        judge_model="m",
-        new_id=workspace.new_id,
-        clock=workspace.clock,
-    )
-
-    assert run.has_failures
-    assert "did not answer" in run.failures[0].failure
-    # The failure was excluded from the mean, not counted as zero or as a half.
-    assert run.overall.percentage == 100.0
-
-
-def test_a_second_evaluation_never_rewrites_the_first() -> None:
-    workspace, _ = a_workspace()
-    assert workspace.evaluations == ()
-    # Recording two runs keeps both; a completed run is immutable.
-    from prompt_workbench.models import Grade, EvaluationRun, SourceRef
-
-    def a_run(run_id: str, value: float) -> EvaluationRun:
-        return EvaluationRun(
-            id=run_id,
-            created_at=WHEN,
-            candidate=SourceRef(id="c", revision=1),
-            source_brief=SourceRef(id="b", revision=1),
-            source_dataset=SourceRef(id="d", revision=1),
-            metrics=(),
-            judge_backend="codex",
-            judge_model="m",
-            cases=(),
-            overall=Grade(value=value),
-        )
-
-    workspace.record_evaluation(a_run("eval-1", 0.5))
-    workspace.record_evaluation(a_run("eval-2", 0.9))
-    assert [run.id for run in workspace.evaluations] == ["eval-1", "eval-2"]
-    assert workspace.evaluations[0].overall.value == 0.5
-    assert workspace.latest_evaluation is not None
-    assert workspace.latest_evaluation.id == "eval-2"
+    text = rendered(at)
+    assert "via `openai`" in text
+    assert f"via `{second}`" in text
+    assert runners["openai"].requests and runners[second].requests

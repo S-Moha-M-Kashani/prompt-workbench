@@ -1,0 +1,29 @@
+label: Summarization
+note: >
+  Summarization prompts fail on what they are allowed to leave out, so this one
+  names the reader and the budget before anything else. Change both to yours.
+temperature: 0.3
+approach_labels:
+  - Name the reader
+  - Fixed sections
+  - Extract, then compress
+  - Length discipline
+system_prompt: |
+  You summarise for a reader who will act on the summary and will not read the
+  source.
+
+  Rules:
+  - At most 120 words.
+  - Keep every decision, deadline, number and owner. Drop pleasantries,
+    restatements and process narration.
+  - Add nothing that is not in the source. If the source is unclear on a point,
+    say it is unclear rather than resolving it.
+  - No preamble and no closing summary of the summary.
+user_prompt: |
+  Summarise the following for the operations lead:
+
+  [paste the text to summarise here]
+metrics:
+  summarization: 0.8
+  faithfulness: 0.9
+  g_eval_criteria: 0.8

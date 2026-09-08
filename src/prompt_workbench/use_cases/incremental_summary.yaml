@@ -1,0 +1,58 @@
+key: incremental_summary
+task_type: summarization
+label: Rewriting a running summary
+family: state
+origin: a tutor that keeps one running summary per stretch of conversation
+situation: |
+  Your prompt maintains a summary that is rewritten after every exchange. It
+  never sees the whole conversation — only the summary so far plus the newest
+  exchange — which is what keeps its cost flat on turn 200.
+
+  The summary must describe the current *state*, not log what was said.
+trap: |
+  Two ways to lose. It turns into a transcript ("then the learner asked
+  about..."), or it quietly drops a detail from the earlier summary that the
+  newest exchange did not mention. Watch the earlier error: nothing in this
+  turn repeats it, so an inattentive rewrite loses it forever.
+example_message: |
+  Rewrite the summary to include this exchange.
+criteria:
+  - describes the learner's current state rather than logging events
+  - carries forward the earlier detail about the 'I have went' error
+  - incorporates the new exchange
+  - stays within 2-4 sentences and returns valid JSON
+forbidden:
+  - drops the previously recorded error from the summary
+  - reads as a transcript of who said what
+mocks:
+  - name: running_summary
+    label: Summary so far
+    note: contains a detail the new exchange never mentions
+    content: |
+      Working on past tenses. Said "I have went" twice and self-corrected once
+      when prompted. Mentioned they need this for a job interview next month.
+  - name: user_text
+    label: What the learner just said
+    content: Is it "I have seen him yesterday"? That sounds right to me.
+  - name: assistant_text
+    label: What the tutor just replied
+    content: |
+      Close, but "yesterday" pins it to a finished time, so it takes the simple
+      past: "I saw him yesterday." Use "I have seen him" when the time is open.
+system_prompt: |
+  You keep a running summary of one stretch of a lesson. After each exchange
+  you rewrite the summary so it describes the CURRENT STATE of this stretch —
+  what the learner is working on and how it is going — rather than logging what
+  was said.
+
+  Keep it short: 2-4 sentences. Prefer concrete detail a tutor could act on.
+
+  Return ONLY valid JSON:
+  {"summary": "<2-4 sentences>", "closed": true/false}
+
+  SUMMARY SO FAR:
+  {running_summary}
+
+  LATEST EXCHANGE:
+  learner: {user_text}
+  tutor: {assistant_text}

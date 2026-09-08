@@ -26,7 +26,12 @@ status=0
 forbidden_path() {
     path=$1
     case "$path" in
-    .claude|.claude/*|.agents|.agents/*|.codex|.codex/*|.superpowers|.superpowers/*|docs|docs/*|openspec|openspec/*)
+    docs/LIMITATIONS.md)
+        # The one document published beside the README, because the README
+        # links to it and a grade's limits belong with the grade.
+        return 1
+        ;;
+    .claude|.claude/*|.agents|.agents/*|.codex|.codex/*|.superpowers|.superpowers/*|docs/*|openspec|openspec/*)
         return 0
         ;;
     .env|.env/*|.mypy_cache|.mypy_cache/*|.pytest_cache|.pytest_cache/*|.venv|.venv/*|.DS_Store|*/.DS_Store|__pycache__|__pycache__/*|*/__pycache__|*/__pycache__/*|*.pyc)
